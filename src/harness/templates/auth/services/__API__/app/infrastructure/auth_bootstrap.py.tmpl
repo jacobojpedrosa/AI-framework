@@ -1,0 +1,32 @@
+import secrets
+
+from starlette.middleware.sessions import SessionMiddleware
+
+from app.adapters.auth_http import auth_router
+from app.infrastructure.auth_runtime import AuthRuntime
+from app.infrastructure.auth_selection import ADMIN_ENABLED
+from app.infrastructure.auth_settings import load_settings
+
+
+class AuthConfigurationProbe:
+    def check(self) -> bool:
+        return load_settings().configured()
+
+
+def install_auth(app, runtime=None):
+    runtime = runtime or AuthRuntime()
+    app.state.auth = runtime
+    app.state.admin_enabled = ADMIN_ENABLED
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=runtime.settings.secret or secrets.token_urlsafe(32),
+        session_cookie="harness_session",
+        max_age=900,
+        same_site="lax",
+        https_only=runtime.settings.secure,
+    )
+    app.include_router(auth_router(runtime))
+    if ADMIN_ENABLED:
+        from app.infrastructure.admin import mount_admin
+
+        mount_admin(app, runtime)

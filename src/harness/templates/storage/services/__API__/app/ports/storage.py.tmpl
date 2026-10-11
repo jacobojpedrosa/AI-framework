@@ -1,0 +1,9 @@
+from typing import Protocol
+
+from app.domain.files import FileMetadata
+
+
+class Storage(Protocol):
+    def put(self, tenant: str, key: str, data: bytes, content_type: str) -> FileMetadata: ...
+    def get(self, tenant: str, key: str) -> tuple[FileMetadata, bytes]: ...
+    def delete(self, tenant: str, key: str) -> bool: ...

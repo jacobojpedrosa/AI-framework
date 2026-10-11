@@ -1,0 +1,45 @@
+import secrets
+
+from starlette.responses import PlainTextResponse, RedirectResponse
+from starlette_admin import BaseAdmin
+from starlette_admin.auth import AdminUser, AuthProvider
+
+from app.infrastructure.auth_selection import ADMIN_RESOURCES
+
+
+class SessionAdminAuth(AuthProvider):
+    def __init__(self, runtime):
+        super().__init__()
+        self.runtime = runtime
+
+    async def authenticate(self, request):
+        principal = self.runtime.principal(request)
+        if self.runtime.admin_allowed(principal):
+            request.state.principal = principal
+            return AdminUser(username=principal.subject)
+        return None
+
+    async def render_login(self, request, templates):
+        if self.runtime.principal(request) is not None:
+            return PlainTextResponse("Forbidden", 403)
+        return RedirectResponse("/auth/login", 303)
+
+    async def logout(self, request):
+        request.session.clear()
+
+
+def mount_admin(app, runtime):
+    admin = BaseAdmin(
+        title="@@PROJECT@@ administration",
+        auth_provider=SessionAdminAuth(runtime),
+        secret_key=runtime.settings.secret or secrets.token_urlsafe(32),
+    )
+    # Explicit factories only. No discovery of ORM models, tables, or domain entities.
+    factories = {}
+    if "records" in ADMIN_RESOURCES:
+        from app.adapters.admin_records import RecordsView
+
+        factories["records"] = lambda: RecordsView(app.state.resources.repository, runtime)
+    for name in ADMIN_RESOURCES:
+        admin.add_view(factories[name]())
+    admin.mount_to(app)

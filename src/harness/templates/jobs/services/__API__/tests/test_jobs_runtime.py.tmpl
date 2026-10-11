@@ -1,0 +1,41 @@
+import asyncio
+import json
+import subprocess
+import sys
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.infrastructure import jobs_runtime
+
+
+def test_api_lifespan_consumes_memory_queue_and_closes(monkeypatch):
+    monkeypatch.setattr(jobs_runtime, "ADAPTER", "memory")
+    app = FastAPI()
+    jobs_runtime.install_jobs(app)
+    with TestClient(app) as client:
+
+        async def submit_and_wait():
+            identifier = await app.state.jobs.run.execute("heartbeat")
+            await asyncio.wait_for(app.state.jobs.queue.pending.join(), timeout=3)
+            return identifier
+
+        identifier = client.portal.call(submit_and_wait)
+        assert app.state.jobs.queue.results[0][0] == identifier
+    assert app.state.jobs.consumer.done()
+
+
+def test_jobs_cli_lists_registry_without_network():
+    result = subprocess.run(
+        [sys.executable, "-m", "app.infrastructure.jobs_cli", "jobs", "list"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout)["jobs"] == ["heartbeat"]
+    rejected = subprocess.run(
+        [sys.executable, "-m", "app.infrastructure.jobs_cli", "jobs", "run", "os.system"],
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode == 2

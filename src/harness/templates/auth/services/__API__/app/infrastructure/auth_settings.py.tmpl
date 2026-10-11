@@ -1,0 +1,76 @@
+import os
+import re
+from dataclasses import dataclass, field
+from urllib.parse import urlsplit
+
+from app.adapters.local_identity import valid_hash
+from app.infrastructure.auth_selection import PROVIDER
+
+
+def https_url(value: str) -> bool:
+    parsed = urlsplit(value)
+    return bool(
+        parsed.scheme == "https"
+        and parsed.hostname
+        and not parsed.username
+        and not parsed.password
+        and not parsed.fragment
+    )
+
+
+def csv(value: str) -> frozenset[str]:
+    return frozenset(item.strip() for item in value.split(",") if item.strip())
+
+
+@dataclass(frozen=True)
+class AuthSettings:
+    provider: str = PROVIDER
+    secret: str = field(default="", repr=False)
+    secure: bool = True
+    username: str = ""
+    password_hash: str = field(default="", repr=False)
+    roles: frozenset[str] = frozenset({"admin"})
+    permissions: frozenset[str] = frozenset()
+    admin_subjects: frozenset[str] = frozenset()
+    issuer: str = ""
+    client_id: str = ""
+    client_secret: str = field(default="", repr=False)
+    redirect_uri: str = ""
+    firebase_project: str = ""
+    firebase_api_key: str = ""
+    firebase_auth_domain: str = ""
+
+    def configured(self) -> bool:
+        if len(self.secret) < 32:
+            return False
+        if self.provider == "local":
+            return bool(self.username and valid_hash(self.password_hash))
+        if self.provider == "oidc":
+            return bool(
+                https_url(self.issuer)
+                and self.client_id
+                and self.client_secret
+                and https_url(self.redirect_uri)
+            )
+        if self.provider == "firebase":
+            return bool(re.fullmatch(r"[a-z][a-z0-9-]{4,61}[a-z0-9]", self.firebase_project))
+        return False
+
+
+def load_settings() -> AuthSettings:
+    return AuthSettings(
+        secret=os.getenv("AUTH_SESSION_SECRET", ""),
+        secure=os.getenv("AUTH_COOKIE_SECURE", "true") != "false",
+        username=os.getenv("AUTH_LOCAL_USERNAME", ""),
+        password_hash=os.getenv("AUTH_LOCAL_PASSWORD_HASH", ""),
+        roles=csv(os.getenv("AUTH_LOCAL_ROLES", "admin")),
+        permissions=csv(os.getenv("AUTH_LOCAL_PERMISSIONS", "")),
+        admin_subjects=csv(os.getenv("AUTH_ADMIN_SUBJECTS", "")),
+        issuer=os.getenv("OIDC_ISSUER", "").rstrip("/"),
+        client_id=os.getenv("OIDC_CLIENT_ID", ""),
+        client_secret=os.getenv("OIDC_CLIENT_SECRET", ""),
+        redirect_uri=os.getenv("OIDC_REDIRECT_URI", ""),
+        firebase_project=os.getenv("FIREBASE_PROJECT_ID", ""),
+        firebase_api_key=os.getenv("FIREBASE_WEB_API_KEY", ""),
+        firebase_auth_domain=os.getenv("FIREBASE_AUTH_DOMAIN", ""),
+    )

@@ -1,0 +1,12 @@
+apps:
+  web:
+    framework: react
+architecture:
+  golden_path: fullstack-ai
+  hexagonal_services: true
+project:
+  name: assistant-web
+schema_version: 1
+services:
+  api:
+    framework: fastapi

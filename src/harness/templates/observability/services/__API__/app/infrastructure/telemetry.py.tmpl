@@ -1,0 +1,231 @@
+import json
+import logging
+import os
+import re
+import time
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from urllib.parse import urlsplit
+from uuid import uuid4
+
+from opentelemetry import trace
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from opentelemetry.trace import SpanKind, StatusCode
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+PROPAGATOR = TraceContextTextMapPropagator()
+METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+LOGGER = logging.getLogger("app.requests")
+
+
+class JsonFormatter(logging.Formatter):
+    """Only allowlisted diagnostics: no arbitrary messages, URLs, payloads or tracebacks."""
+
+    def format(self, record):
+        context = trace.get_current_span().get_span_context()
+        output = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "level": record.levelname,
+            "event": "runtime_log",
+            "logger": record.name,
+        }
+        if context.is_valid:
+            output.update(trace_id=f"{context.trace_id:032x}", span_id=f"{context.span_id:016x}")
+        if record.exc_info and record.exc_info[0]:
+            output["error_type"] = record.exc_info[0].__name__
+        if record.name == "app.requests" and isinstance(record.msg, dict):
+            for name in (
+                "event",
+                "method",
+                "route",
+                "status",
+                "duration_ms",
+                "request_id",
+                "trace_id",
+                "span_id",
+            ):
+                if name in record.msg:
+                    output[name] = record.msg[name]
+        return json.dumps(output, separators=(",", ":"))
+
+
+class Telemetry:
+    def __init__(self, traces=None, meters=None):
+        mode = os.getenv("TELEMETRY_EXPORTER", "console")
+        if mode not in {"console", "otlp", "none"}:
+            raise ValueError("Invalid telemetry exporter")
+        if mode == "otlp":
+            endpoint = urlsplit(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", ""))
+            if (
+                endpoint.scheme not in {"http", "https"}
+                or not endpoint.hostname
+                or endpoint.username
+                or endpoint.password
+                or endpoint.query
+                or endpoint.fragment
+            ):
+                raise ValueError("OTLP requires an explicit HTTP(S) collector endpoint")
+        resource = Resource({"service.name": "@@API@@", "service.namespace": "@@PROJECT@@"})
+        ratio = float(os.getenv("TELEMETRY_SAMPLE_RATIO", "1"))
+        if not 0 <= ratio <= 1:
+            raise ValueError("Telemetry sample ratio must be between zero and one")
+        if traces is None:
+            traces = TracerProvider(
+                resource=resource, sampler=ParentBased(TraceIdRatioBased(ratio))
+            )
+            if mode == "console":
+                exporter = ConsoleSpanExporter(
+                    formatter=lambda span: span.to_json(indent=None) + "\n"
+                )
+                traces.add_span_processor(BatchSpanProcessor(exporter))
+            elif mode == "otlp":
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+                traces.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(timeout=3)))
+        if meters is None:
+            readers = []
+            if mode != "none":
+                if mode == "otlp":
+                    from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+                        OTLPMetricExporter,
+                    )
+
+                    metric_exporter = OTLPMetricExporter(timeout=3)
+                else:
+                    metric_exporter = ConsoleMetricExporter(
+                        formatter=lambda data: data.to_json(indent=None) + "\n",
+                    )
+                readers.append(
+                    PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
+                )
+            meters = MeterProvider(resource=resource, metric_readers=readers)
+        self.traces, self.meters = traces, meters
+        self.tracer = traces.get_tracer("harness.http", "1.0.0")
+        meter = meters.get_meter("harness.http", "1.0.0")
+        self.requests = meter.create_counter("http.server.requests", unit="{request}")
+        self.duration = meter.create_histogram(
+            "http.server.request.duration",
+            unit="s",
+            explicit_bucket_boundaries_advisory=(
+                0.005,
+                0.01,
+                0.025,
+                0.05,
+                0.1,
+                0.25,
+                0.5,
+                1,
+                2.5,
+                5,
+                10,
+            ),
+        )
+
+    def close(self):
+        self.traces.shutdown()
+        self.meters.shutdown()
+
+
+class TelemetryMiddleware:
+    def __init__(self, app, telemetry):
+        self.app, self.telemetry = app, telemetry
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        headers = {
+            key.decode("latin1"): value.decode("latin1")
+            for key, value in scope["headers"]
+            if key in {b"traceparent", b"tracestate", b"x-request-id"} and len(value) <= 512
+        }
+        # Only W3C traceparent is accepted; do not propagate baggage or vendor tracestate.
+        parent = PROPAGATOR.extract({"traceparent": headers.get("traceparent", "")})
+        request_id = headers.get("x-request-id", "")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", request_id):
+            request_id = uuid4().hex
+        scope.setdefault("state", {})["request_id"] = request_id
+        method = scope["method"] if scope["method"] in METHODS else "OTHER"
+        status = 500
+        started = time.perf_counter()
+        with self.telemetry.tracer.start_as_current_span(
+            "HTTP",
+            context=parent,
+            kind=SpanKind.SERVER,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            context = span.get_span_context()
+            trace_id, span_id = f"{context.trace_id:032x}", f"{context.span_id:016x}"
+
+            async def traced_send(message):
+                nonlocal status
+                if message["type"] == "http.response.start":
+                    status = message["status"]
+                    response_headers = [
+                        (key, value)
+                        for key, value in message.get("headers", [])
+                        if key.lower() not in {b"x-request-id", b"x-trace-id"}
+                    ]
+                    message = {
+                        **message,
+                        "headers": response_headers
+                        + [
+                            (b"x-request-id", request_id.encode()),
+                            (b"x-trace-id", trace_id.encode()),
+                        ],
+                    }
+                await send(message)
+
+            try:
+                await self.app(scope, receive, traced_send)
+            except Exception:
+                status = 500
+                raise
+            finally:
+                route = getattr(scope.get("route"), "path", None) or "unmatched"
+                elapsed = time.perf_counter() - started
+                attributes = {
+                    "http.request.method": method,
+                    "http.route": route,
+                    "http.response.status_code": status,
+                }
+                span.update_name(method + " " + route)
+                span.set_attributes(attributes)
+                if status >= 500:
+                    span.set_status(StatusCode.ERROR)
+                self.telemetry.requests.add(1, attributes)
+                self.telemetry.duration.record(elapsed, attributes)
+                LOGGER.info(
+                    {
+                        "event": "http_request",
+                        "method": method,
+                        "route": route,
+                        "status": status,
+                        "duration_ms": round(elapsed * 1000, 3),
+                        "request_id": request_id,
+                        "trace_id": trace_id,
+                        "span_id": span_id,
+                    }
+                )
+
+
+def install_observability(app, telemetry=None):
+    telemetry = telemetry or Telemetry()
+    app.state.telemetry = telemetry
+    app.add_middleware(TelemetryMiddleware, telemetry=telemetry)
+    previous = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(application):
+        try:
+            async with previous(application):
+                yield
+        finally:
+            telemetry.close()
+
+    app.router.lifespan_context = lifespan

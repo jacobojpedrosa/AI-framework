@@ -1,0 +1,32 @@
+COMPOSE ?= docker compose
+
+.PHONY: up down frontend-up frontend-down backend-up backend-down logs status test lint format build
+up:
+	$(COMPOSE) up --build --detach --wait --wait-timeout 120
+down:
+	$(COMPOSE) down --remove-orphans
+frontend-up:
+	$(COMPOSE) up --build --detach --wait --wait-timeout 120 web
+frontend-down:
+	$(COMPOSE) stop web
+backend-up:
+	$(COMPOSE) up --build --detach --wait --wait-timeout 120 api
+backend-down:
+	$(COMPOSE) stop api
+logs:
+	$(COMPOSE) logs --follow --tail=100
+status:
+	$(COMPOSE) ps
+test:
+	$(COMPOSE) run --build --rm --no-deps api python -m pytest
+	$(COMPOSE) run --build --rm --no-deps web npm test
+lint:
+	$(COMPOSE) run --build --rm --no-deps api python -m ruff check .
+	$(COMPOSE) run --rm --no-deps api python -m ruff format --check .
+	$(COMPOSE) run --build --rm --no-deps web npm run lint
+format:
+	$(COMPOSE) run --build --rm --no-deps --user "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$$(pwd)/services/@@API@@:/workspace" -w /workspace api python -m ruff format .
+	$(COMPOSE) run --build --rm --no-deps --user "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$$(pwd)/apps/@@WEB@@:/workspace" -w /workspace web /app/node_modules/.bin/prettier --write .
+build:
+	$(COMPOSE) build
+	$(COMPOSE) run --rm --no-deps web npm run build

@@ -1,0 +1,39 @@
+"""Small tracked-file secret baseline; prints paths, never matched values."""
+
+import re
+import subprocess
+from pathlib import Path
+
+PATTERNS = [
+    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(rb"AKIA[A-Z0-9]{16}"),
+    re.compile(rb"gh[pousr]_[A-Za-z0-9]{36,}"),
+]
+
+
+def findings(paths):
+    found = []
+    for name in paths:
+        path = Path(name)
+        if path.is_symlink() or not path.is_file():
+            continue
+        private = (
+            path.name in {".env", "terraform.tfvars", "terraform.tfvars.json"}
+            or path.name.endswith((".tfstate", ".tfplan", ".auto.tfvars", ".auto.tfvars.json"))
+            or path.name.startswith("gha-creds-")
+        )
+        if private or any(pattern.search(path.read_bytes()) for pattern in PATTERNS):
+            found.append(name)
+    return found
+
+
+def main():
+    output = subprocess.run(["git", "ls-files", "-z"], check=True, capture_output=True).stdout
+    found = findings([name.decode() for name in output.split(b"\0") if name])
+    if found:
+        raise SystemExit("Sensitive tracked files: " + ", ".join(found))
+    print("Tracked secret baseline passed")
+
+
+if __name__ == "__main__":
+    main()

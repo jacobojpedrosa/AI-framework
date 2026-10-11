@@ -1,0 +1,7 @@
+from taskiq import TaskiqScheduler
+
+from app.adapters.taskiq_jobs import RegisteredScheduleSource
+from app.infrastructure.taskiq_runtime import create_components
+
+broker, queue, schedules = create_components()
+scheduler = TaskiqScheduler(broker, [RegisteredScheduleSource(schedules)])

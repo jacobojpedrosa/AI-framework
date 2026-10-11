@@ -1,0 +1,24 @@
+from pathlib import Path
+
+from app.adapters.fake_ai import FakeAI
+from app.infrastructure.ai_evals import evaluate, load_dataset
+
+
+def test_eval_smoke_and_failed_expectation():
+    cases, checksum = load_dataset(Path(__file__).parents[1] / "evals/smoke.json")
+    assert len(checksum) == 64
+    assert all(r["status"] == "pass" for r in evaluate(FakeAI(), cases))
+    cases[0]["expected"] = "Incorrect expectation"
+    assert evaluate(FakeAI(), cases)[0]["status"] == "fail"
+
+
+def test_eval_sanitizes_provider_errors():
+    class Broken:
+        def generate(self, request):
+            raise RuntimeError("secret-token")
+
+    cases, _ = load_dataset(Path(__file__).parents[1] / "evals/smoke.json")
+    results = evaluate(Broken(), cases)
+    assert all(r["status"] == "error" for r in results)
+    assert "secret-token" not in str(results)
+

@@ -1,0 +1,9 @@
+apps:
+  web:
+    framework: react
+architecture:
+  golden_path: simple-web
+  hexagonal_services: false
+project:
+  name: catalog-web
+schema_version: 1

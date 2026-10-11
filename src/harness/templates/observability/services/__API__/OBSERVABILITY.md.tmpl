@@ -1,0 +1,73 @@
+# Vendor-neutral observability
+
+`observability.provider: opentelemetry` adds manual OpenTelemetry instrumentation to
+the API and the web health client. No collector or commercial account is provisioned.
+The generated app never imports the Harness at runtime.
+
+## Local diagnostics
+
+Start with `make up`. Open the frontend and check the API. Browser console events
+`web_span` contain the client span/trace IDs. `docker compose logs api` contains the
+corresponding server span and `http_request` event. The server's parent ID matches
+the web span ID; both have the same trace ID. The Vite same-origin `/api` proxy
+preserves `traceparent`. No permissive CORS policy is required.
+
+The two response headers `x-request-id` and `x-trace-id` aid support diagnostics.
+An incoming request ID is accepted only when it is 1–64 alphanumeric, hyphen or
+underscore characters. Invalid IDs are replaced. Invalid W3C trace parents start
+a new trace. These IDs are diagnostic information, never authentication or tenant identity.
+Unhandled failures that reach FastAPI's outer error middleware may not carry those
+response headers; the request log still records status 500 and its correlation IDs.
+
+Uvicorn uses `app/infrastructure/logging.json`. Request logs contain timestamp,
+level, method, registered route template, status, duration and IDs. Arbitrary runtime
+messages are represented as `runtime_log`, with logger/severity and exception type
+when available. Raw messages, exception text and tracebacks are intentionally omitted;
+applications can extend the formatter with reviewed, explicit diagnostic fields.
+Bodies, auth headers, query strings, baggage and vendor tracestate are not captured.
+Do not place sensitive data in diagnostic request IDs or custom telemetry fields.
+
+## Traces and metrics
+
+The API creates a SERVER span for every sampled HTTP request; the web health helper
+creates a CLIENT span. Metrics count requests and record request duration in seconds
+using buckets from 5 ms to 10 s. Attributes are method, route template and status.
+Unknown paths share `unmatched`; identifiers and query parameters do not become labels.
+OpenTelemetry may attach sampled trace exemplars to metrics; these are not metric labels.
+
+`/api/health` retains liveness behavior; `/api/readiness` retains dependency readiness.
+Telemetry collector reachability is not a readiness requirement and diagnostics do
+not replace dependency checks. There is no public metrics/debug endpoint; metrics
+are pushed or logged rather than exposing operational data anonymously.
+
+Server settings (only in the API environment):
+
+| Variable | Behavior |
+| --- | --- |
+| `TELEMETRY_EXPORTER` | `console` (default), `otlp` or `none` |
+| `TELEMETRY_SAMPLE_RATIO` | 0–1 sampling for new API roots; remote sampling is honored |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Explicit HTTP(S) collector endpoint when using `otlp`, e.g. `http://collector:4318` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Standard SDK authentication headers; never sent to the browser |
+
+OTLP uses HTTP/protobuf `/v1/traces` and `/v1/metrics`, compatible with standard
+OpenTelemetry collectors. Use HTTPS for remote collectors carrying credentials.
+The trace exporter batches asynchronously; metrics export every 30 seconds and on
+shutdown. Network exports use a three-second timeout. Exporter failure does not make
+successful application requests fail, but telemetry may be lost. `none` disables
+API exports while correlation and structured logs remain; it does not disable the
+frontend's console spans. Browser spans are local console evidence in this phase,
+not uploaded to a remote collector. The web helper currently samples every request.
+
+## Scope and verification
+
+This baseline covers web → API. It does not automatically instrument database queries,
+AI prompts, application jobs or the API → worker boundary. Add explicit adapters for
+those boundaries when needed, with reviewed data capture and context propagation.
+No service credentials, request bodies or AI prompt data are exposed to the frontend.
+
+`make test` checks propagation, bounded metric labels, rejection of malformed context,
+sanitized failures and real OTLP SDK protobuf encoding using a simulated HTTP session.
+The repository's `scripts/smoke_observability.py` runs the actual web helper in Node
+through the running Vite proxy and API, then compares exported trace and parent IDs.
+It also checks actual JSON logs, shutdown metric export, frontend build and combined
+configuration with AI/persistence/jobs/auth. This transport test is not a browser UI E2E test.

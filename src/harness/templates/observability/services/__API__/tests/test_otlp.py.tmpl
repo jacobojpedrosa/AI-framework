@@ -1,0 +1,52 @@
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricExportResult
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from requests import Response
+
+
+class CaptureSession:
+    def __init__(self):
+        self.headers = {}
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        response = Response()
+        response.status_code = 200
+        response._content = b""
+        return response
+
+    def close(self):
+        pass
+
+
+def test_otlp_http_sdk_serializes_valid_traces_and_metrics():
+    session = CaptureSession()
+    exporter = OTLPSpanExporter(endpoint="http://collector.test/v1/traces", session=session)
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with provider.get_tracer("test").start_as_current_span("request") as span:
+        trace_id = span.get_span_context().trace_id
+    payload = ExportTraceServiceRequest.FromString(session.calls[0][1]["data"])
+    exported = payload.resource_spans[0].scope_spans[0].spans[0]
+    assert exported.name == "request"
+    assert int.from_bytes(exported.trace_id) == trace_id
+    assert session.calls[0][0].endswith("/v1/traces")
+    provider.shutdown()
+    reader = InMemoryMetricReader()
+    meters = MeterProvider(metric_readers=[reader])
+    meters.get_meter("test").create_counter("requests").add(1)
+    metric_session = CaptureSession()
+    metrics = OTLPMetricExporter(
+        endpoint="http://collector.test/v1/metrics", session=metric_session
+    )
+    assert metrics.export(reader.get_metrics_data()) == MetricExportResult.SUCCESS
+    payload = ExportMetricsServiceRequest.FromString(metric_session.calls[0][1]["data"])
+    assert payload.resource_metrics[0].scope_metrics[0].metrics[0].name == "requests"
+    meters.shutdown()
+    metrics.shutdown()

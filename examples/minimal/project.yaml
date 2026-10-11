@@ -1,0 +1,9 @@
+schema_version: 1
+project:
+  name: example-ai-project
+architecture:
+  golden_path: ai-service
+  hexagonal_services: true
+services:
+  api:
+    framework: fastapi

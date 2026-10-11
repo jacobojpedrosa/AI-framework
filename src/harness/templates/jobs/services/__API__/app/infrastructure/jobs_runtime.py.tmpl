@@ -1,0 +1,64 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
+
+from app.adapters.memory_jobs import MemoryQueue, MemorySchedules
+from app.application.jobs import RunJob
+from app.infrastructure.job_registry import REGISTRY, SCHEDULES
+from app.infrastructure.jobs_selection import ADAPTER
+
+
+class JobsRuntime:
+    def __init__(self):
+        self.broker = None
+        self.consumer = None
+        if ADAPTER == "memory":
+            self.queue = MemoryQueue(REGISTRY)
+            self.schedules = MemorySchedules(SCHEDULES)
+        else:
+            from app.infrastructure.taskiq_runtime import create_components
+
+            self.broker, self.queue, self.schedules = create_components()
+        self.run = RunJob(REGISTRY, self.queue)
+
+    async def start(self):
+        if self.broker is None:
+            self.consumer = asyncio.create_task(self.consume())
+
+    async def consume(self):
+        while True:
+            try:
+                await self.schedules.tick(self.queue)
+                if not self.queue.pending.empty():
+                    await self.queue.consume_one()
+            except Exception:
+                logging.getLogger(__name__).error("Registered job failed")
+            await asyncio.sleep(0.1)
+
+    async def close(self):
+        if self.consumer is not None:
+            self.consumer.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.consumer
+        if self.broker is not None:
+            try:
+                await self.broker.shutdown()
+            finally:
+                await self.schedules.client.aclose()
+
+
+def install_jobs(app):
+    runtime = JobsRuntime()
+    app.state.jobs = runtime
+    previous = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(application):
+        async with previous(application):
+            try:
+                await runtime.start()
+                yield
+            finally:
+                await runtime.close()
+
+    app.router.lifespan_context = lifespan

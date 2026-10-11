@@ -1,0 +1,4 @@
+spec_version: 1
+name: document-platform
+web: true
+services: [documents, search]

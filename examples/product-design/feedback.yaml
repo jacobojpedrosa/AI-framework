@@ -1,0 +1,44 @@
+product_version: 1
+name: signal-feedback
+title: Signal
+summary: A shared place to collect customer feedback and decide what deserves attention next.
+personas:
+  - Product manager reviewing customer feedback before planning the next iteration.
+  - Teammate recording a clear customer need while it is fresh.
+use_cases:
+  - Browse and filter feedback by title or status.
+  - Open a feedback item and read its full context.
+  - Submit a feedback item and find it again after refreshing the page.
+screens: [list, detail, create]
+flows:
+  - name: Review feedback
+    steps: [list, detail, list]
+  - name: Capture feedback
+    steps: [list, create, detail, list]
+entities:
+  - name: feedback
+    singular: Feedback
+    plural: Feedback
+    fields: [title, description, status]
+    statuses: [new, reviewing, planned]
+integrations: []
+ai_capabilities: []
+constraints:
+  - Local prototype with synthetic data only; no public deployment or authentication in this iteration.
+  - Records persist in API process memory and reset when that process restarts.
+  - Usable with keyboard and on mobile; visible loading, empty, error and validation states.
+  - One collection with at most 1000 records; no attachments, deletion or editing yet.
+design:
+  direction: Calm editorial workspace. Warm off-white canvas, forest green accents, generous spacing and clear typography. Prioritize content over decoration.
+  accent: '#245b45'
+  references: []
+seed:
+  - title: A faster way to find saved views
+    description: Customer interviews suggest that frequent users need quick access to the views they revisit each morning. Explore a small favorites section before adding another navigation layer.
+    status: reviewing
+  - title: Keep context when sharing a report
+    description: Shared report links should preserve the selected date range so the recipient sees the same result. This example contains no real customer data.
+    status: planned
+  - title: Make keyboard shortcuts discoverable
+    description: New teammates do not know which shortcuts are available. A concise reference could help them learn at their own pace.
+    status: new

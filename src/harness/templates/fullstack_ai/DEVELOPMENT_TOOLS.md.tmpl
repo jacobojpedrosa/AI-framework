@@ -1,0 +1,67 @@
+# Herramientas de desarrollo
+
+Desde este directorio, con Harness instalado:
+
+```bash
+harness integrations init --project . --dry-run
+harness integrations init --project .
+```
+
+Requiere red, Node >=20.19.0, npm y Bash en macOS/Linux. `scaffold` no instala
+dependencias; este comando explícito sí descarga e inicializa herramientas oficiales.
+OpenSpec 1.13.2 queda fijado con npm lock e integridad de dependencias.
+Agent OS 3.0 queda fijado al commit 475b0cac4c7c5cf2336ad5a663b691a6d3415e05
+(incluye correcciones del instalador posteriores a 3.0), con SHA-256 del archivo.
+La evidencia completa queda en `.harness/integrations.json`.
+
+| Responsable | Contenido |
+| --- | --- |
+| Agent OS | Estándares de ingeniería en `agent-os/standards/`: cómo construimos |
+| OpenSpec | Especificaciones y cambios en `openspec/`: qué cambia |
+| Harness | `project.yaml`, scaffolding y orquestación |
+
+La instalación usa `openspec init --tools claude,codex --profile core` y el script
+oficial de Agent OS `scripts/project-install.sh --profile default`. No genera
+workflows alternativos. En Claude Code están los comandos upstream de Agent OS
+`/agent-os:discover-standards`, `/agent-os:inject-standards` y
+`/agent-os:index-standards`. Se conservan sin modificaciones. `shape-spec` y
+`plan-product` no se activan porque las especificaciones corresponden a OpenSpec.
+El código original completo se conserva en `.harness/tooling/agent-os-<commit>/`.
+
+OpenSpec instala sus skills oficiales en `.claude/skills/` y `.agents/skills/`.
+En Claude Code se empieza con `/opsx:propose`; en Codex se usa la skill oficial
+`openspec-propose`. Agent OS no publica un instalador nativo de skills para Codex
+en esta revisión: sus estándares son Markdown y OpenSpec los referencia desde
+`openspec/config.yaml`. Los comandos de Agent OS requieren un host compatible;
+no se convierten en skills propias del Harness.
+
+Para consultar el CLI fijado sin configuración global ni telemetría:
+
+```bash
+export OPENSPEC_TELEMETRY=0 DO_NOT_TRACK=1
+export XDG_CONFIG_HOME="$PWD/.harness/tooling/state/config"
+export XDG_DATA_HOME="$PWD/.harness/tooling/state/data"
+.harness/tooling/node_modules/.bin/openspec --version
+.harness/tooling/node_modules/.bin/openspec list --json
+```
+
+El perfil upstream parte sin estándares instalables; el Harness añade una norma
+de propiedad y límites arquitectónicos al índice. Amplíala usando Agent OS.
+Versiona `openspec/`, `agent-os/`, `.claude/`, `.agents/` y el recibo de instalación.
+Los binarios, cachés y fuentes descargadas de `.harness/tooling/` se ignoran en Git.
+
+La operación exige que sus directorios de destino no existan, incluso `.claude/`
+o `.agents/` con contenido ajeno. No actualiza ni fusiona instalaciones existentes.
+Para restaurar herramientas tras clonar un proyecto ya inicializado, instala el
+mismo paquete npm en un directorio local separado; conserva los estándares y
+skills versionados. La reinstalación gestionada llegará con la fase de actualización.
+
+Los instaladores se ejecutan en staging; un fallo ordinario revierte solo los
+directorios creados por esta invocación. Un corte de proceso/máquina puede dejar
+`.harness/integrations.installing` o una instalación parcial: revísalos antes de
+reintentar. No ejecutes instaladores concurrentes ni edites destinos durante la instalación.
+No se instala globalmente, no se modifica el shell y no se ejecuta ningún LLM.
+
+Fuentes: [OpenSpec](https://github.com/Fission-AI/OpenSpec),
+[Agent OS](https://github.com/buildermethods/agent-os). Ambas herramientas usan MIT;
+sus licencias se conservan con los paquetes oficiales descargados.

@@ -1,0 +1,30 @@
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Engine
+
+from app.adapters.sql_repository import open_engine
+
+
+def upgrade(engine: Engine) -> None:
+    config = Config()
+    config.set_main_option("script_location", str(Path(__file__).parents[2] / "migrations"))
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            # Serialize concurrent migration runners; lock released with the transaction.
+            from sqlalchemy import text
+
+            connection.execute(text("SELECT pg_advisory_xact_lock(734812901)"))
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+
+
+if __name__ == "__main__":
+    import os
+
+    engine = open_engine(os.environ["DATABASE_URL"])
+    try:
+        upgrade(engine)
+    finally:
+        engine.dispose()

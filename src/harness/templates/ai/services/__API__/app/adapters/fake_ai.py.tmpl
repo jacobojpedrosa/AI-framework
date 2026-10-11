@@ -1,0 +1,11 @@
+from app.domain.ai import TextRequest, TextResult
+
+
+class FakeAI:
+    """Deterministic test adapter; never calls a model or echoes private input."""
+
+    def generate(self, request: TextRequest) -> TextResult:
+        return TextResult("Fake response.", "fake", "fake-v1")
+
+    def check_remote(self) -> None:
+        return None

@@ -1,0 +1,43 @@
+from dataclasses import dataclass, field
+
+
+class AIError(Exception):
+    """Only stable public codes cross the adapter boundary."""
+
+    def __init__(self, code: str) -> None:
+        allowed = {
+            "configuration",
+            "authentication",
+            "rate_limited",
+            "timeout",
+            "unavailable",
+            "invalid_request",
+            "invalid_response",
+            "blocked",
+            "incomplete",
+        }
+        self.code = code if code in allowed else "unavailable"
+        super().__init__(self.code)
+
+
+@dataclass(frozen=True)
+class TextRequest:
+    prompt: str = field(repr=False)
+    max_output_tokens: int = 256
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.prompt, str) or not self.prompt.strip() or len(self.prompt) > 16000:
+            raise ValueError("prompt must contain 1-16000 characters")
+        if type(self.max_output_tokens) is not int or not 16 <= self.max_output_tokens <= 2048:
+            raise ValueError("max_output_tokens must be an integer between 16 and 2048")
+
+
+@dataclass(frozen=True)
+class TextResult:
+    text: str
+    provider: str
+    model: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str) or not self.text.strip():
+            raise AIError("invalid_response")

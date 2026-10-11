@@ -1,0 +1,163 @@
+import hmac
+import html
+import json
+import secrets
+import time
+from urllib.parse import parse_qs
+
+from fastapi import APIRouter, Request
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+
+def page(body: str, status=200):
+    return HTMLResponse(
+        '<!doctype html><html lang="en"><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        "<title>Sign in</title><body><main><h1>Sign in</h1>" + body + "</main></body></html>",
+        status_code=status,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
+async def form_data(request: Request) -> dict[str, str]:
+    body = await request.body()
+    if len(body) > 20000:
+        raise ValueError("Invalid form")
+    data = parse_qs(body.decode(), max_num_fields=10)
+    return {k: v[0] for k, v in data.items() if len(v) == 1}
+
+
+def csrf_valid(request, form):
+    expected = request.session.get("csrf", "")
+    return bool(expected and hmac.compare_digest(expected, form.get("csrf", "")))
+
+
+def auth_router(runtime):
+    router = APIRouter()
+
+    @router.get("/auth/login", include_in_schema=False)
+    async def login_page(request: Request):
+        if not runtime.check():
+            return page("<p>Authentication is not configured.</p>", 503)
+        if runtime.settings.provider == "oidc":
+            try:
+                return await runtime.oauth.identity.authorize_redirect(
+                    request,
+                    runtime.settings.redirect_uri,
+                )
+            except Exception:
+                return page("<p>Identity provider unavailable.</p>", 503)
+        csrf = request.session.setdefault("csrf", secrets.token_urlsafe(32))
+        hidden = '<input type="hidden" name="csrf" value="' + html.escape(csrf) + '">'
+        if runtime.settings.provider == "local":
+            return page(
+                '<form method="post" action="/auth/login">'
+                + hidden
+                + '<label>Username <input name="username" autocomplete="username" required></label>'
+                '<label>Password <input name="password" type="password" '
+                'autocomplete="current-password" required></label><button>Sign in</button></form>'
+            )
+        settings = runtime.settings
+        if not settings.firebase_api_key or not settings.firebase_auth_domain:
+            return page("<p>Firebase web sign-in is not configured.</p>", 503)
+        config = json.dumps(
+            {
+                "apiKey": settings.firebase_api_key,
+                "authDomain": settings.firebase_auth_domain,
+                "projectId": settings.firebase_project,
+            }
+        ).replace("<", "\\u003c")
+        return page(
+            '<button id="signin">Continue with Google</button><p id="error" role="alert"></p>'
+            '<form id="identity" method="post" action="/auth/login">'
+            + hidden
+            + '<input type="hidden" name="id_token" id="token"></form>'
+            '<script type="module">'
+            'import {initializeApp} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";'
+            "import {getAuth,GoogleAuthProvider,signInWithPopup,inMemoryPersistence,setPersistence,"
+            'signOut} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";'
+            f"const auth=getAuth(initializeApp({config}));"
+            'document.getElementById("signin").onclick=async()=>{try{'
+            "await setPersistence(auth,inMemoryPersistence);"
+            "const result=await signInWithPopup(auth,new GoogleAuthProvider());"
+            'document.getElementById("token").value=await result.user.getIdToken();'
+            'await signOut(auth);document.getElementById("identity").submit();'
+            '}catch{document.getElementById("error").textContent="Sign-in failed. Try again."}};'
+            "</script>"
+        )
+
+    @router.post("/auth/login", include_in_schema=False)
+    async def login(request: Request):
+        if not runtime.check():
+            return page("<p>Authentication is not configured.</p>", 503)
+        try:
+            form = await form_data(request)
+        except (ValueError, UnicodeError):
+            return page("<p>Invalid form.</p>", 400)
+        if not csrf_valid(request, form):
+            return page("<p>Invalid CSRF token.</p>", 403)
+        if not runtime.limiter.admit():
+            return page("<p>Too many attempts. Try again later.</p>", 429)
+        principal = None
+        expires = int(time.time()) + 900
+        if runtime.settings.provider == "local":
+            principal = await run_in_threadpool(
+                runtime.local_login,
+                form.get("username", ""),
+                form.get("password", ""),
+            )
+        elif runtime.settings.provider == "firebase":
+            try:
+                principal, expires = await run_in_threadpool(
+                    runtime.verifier.verify,
+                    form.get("id_token", ""),
+                )
+            except ValueError:
+                pass
+        if principal is None:
+            return page("<p>Invalid credentials.</p>", 401)
+        runtime.establish(request, principal, expires)
+        return RedirectResponse("/admin/" if request.app.state.admin_enabled else "/api/me", 303)
+
+    @router.get("/auth/callback", include_in_schema=False)
+    async def callback(request: Request):
+        if not runtime.check() or runtime.settings.provider != "oidc":
+            return page("<p>Authentication is not configured.</p>", 503)
+        try:
+            from app.adapters.jwt_identity import claims_identity
+
+            token = await runtime.oauth.identity.authorize_access_token(request)
+            principal, expires = claims_identity(dict(token["userinfo"]))
+            runtime.establish(request, principal, expires)
+        except Exception:
+            request.session.clear()
+            return page("<p>Sign-in failed.</p>", 401)
+        return RedirectResponse("/admin/" if request.app.state.admin_enabled else "/api/me", 303)
+
+    @router.get("/api/me")
+    async def me(request: Request):
+        principal = runtime.principal(request)
+        if principal is None:
+            return JSONResponse({"detail": "Authentication required"}, 401)
+        return JSONResponse(
+            {
+                "subject": principal.subject,
+                "roles": sorted(principal.roles),
+                "permissions": sorted(principal.permissions),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @router.post("/auth/logout", include_in_schema=False)
+    async def logout(request: Request):
+        try:
+            form = await form_data(request)
+        except (ValueError, UnicodeError):
+            return page("<p>Invalid form.</p>", 400)
+        if not csrf_valid(request, form):
+            return page("<p>Invalid CSRF token.</p>", 403)
+        request.session.clear()
+        return RedirectResponse("/auth/login", 303)
+
+    return router

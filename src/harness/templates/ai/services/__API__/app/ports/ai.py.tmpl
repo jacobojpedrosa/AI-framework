@@ -1,0 +1,9 @@
+from typing import Protocol
+
+from app.domain.ai import TextRequest, TextResult
+
+
+class TextProvider(Protocol):
+    """One non-streaming text request; raises sanitized AIError on provider failure."""
+
+    def generate(self, request: TextRequest) -> TextResult: ...

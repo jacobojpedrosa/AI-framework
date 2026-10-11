@@ -1,0 +1,13 @@
+from app.domain.ai import AIError
+
+
+def status_error(status: int | None) -> AIError:
+    if status in (401, 403):
+        return AIError("authentication")
+    if status == 429:
+        return AIError("rate_limited")
+    if status in (408, 504):
+        return AIError("timeout")
+    if status is not None and 400 <= status < 500:
+        return AIError("invalid_request")
+    return AIError("unavailable")

@@ -1,0 +1,92 @@
+import asyncio
+import json
+import os
+import uuid
+
+import pytest
+from redis.asyncio import Redis
+from taskiq import InMemoryBroker, TaskiqScheduler
+from taskiq.exceptions import ScheduledTaskCancelledError
+
+from app.adapters.taskiq_jobs import RedisSchedules, RegisteredScheduleSource, TaskiqQueue
+from app.application.jobs import JobRegistry, heartbeat
+from app.domain.jobs import Schedule
+
+
+class HashStore:
+    """Minimal Redis command fake; real Redis uses the same contract below."""
+
+    def __init__(self):
+        self.values = {}
+
+    async def hmget(self, key, names):
+        return [self.values.get((key, name)) for name in names]
+
+    async def hset(self, key, name, value):
+        self.values[key, name] = value
+
+
+@pytest.mark.parametrize("backend", ["fake", "redis"])
+def test_schedule_store_contract(backend):
+    url = os.getenv("TEST_JOBS_REDIS_URL")
+    if backend == "redis" and not url:
+        pytest.skip("Set TEST_JOBS_REDIS_URL for the real Redis contract")
+
+    async def check():
+        client = HashStore() if backend == "fake" else Redis.from_url(url)
+        key = "harness:jobs:contract:" + uuid.uuid4().hex
+        definitions = (Schedule("registered", "heartbeat"),)
+        store = RedisSchedules(client, key, definitions)
+        try:
+            assert await store.list() == definitions
+            await store.update("registered", True, 2)
+            assert (await RedisSchedules(client, key, definitions).list())[0].enabled
+            for name, enabled, interval in (
+                ("unknown", True, 1),
+                ("registered", "true", 1),
+                ("registered", True, 0),
+            ):
+                with pytest.raises(ValueError):
+                    await store.update(name, enabled, interval)
+            # Arbitrary redis fields cannot register jobs or override the task name.
+            await client.hset(key, "unknown", json.dumps({"job": "os.system"}))
+            assert len(await store.list()) == 1
+            await client.hset(key, "registered", json.dumps({"job": "os.system"}))
+            with pytest.raises(ValueError):
+                await store.list()
+        finally:
+            if backend == "redis":
+                await client.delete(key)
+                await client.aclose()
+
+    asyncio.run(check())
+
+
+def test_real_taskiq_kicker_and_scheduler_use_registered_handlers():
+    async def check():
+        broker = InMemoryBroker(await_inplace=True)
+        task = broker.task(task_name="jobs.heartbeat")(heartbeat)
+        queue = TaskiqQueue(JobRegistry({"heartbeat": heartbeat}), {"heartbeat": task}, broker)
+        await broker.startup()
+        try:
+            identifier = await queue.enqueue("heartbeat")
+            assert (await broker.result_backend.get_result(identifier)).return_value[
+                "status"
+            ] == "ok"
+            with pytest.raises(ValueError):
+                await queue.enqueue("os.system")
+            store = RedisSchedules(HashStore(), "key", (Schedule("registered", "heartbeat"),))
+            source = RegisteredScheduleSource(store)
+            assert await source.get_schedules() == []
+            await store.update("registered", True, 1)
+            entry = (await source.get_schedules())[0]
+            assert entry.task_name == "jobs.heartbeat" and entry.args == [] and entry.kwargs == {}
+            scheduler = TaskiqScheduler(broker, [source])
+            await scheduler.on_ready(source, entry)
+            await store.update("registered", False, 1)
+            with pytest.raises(ScheduledTaskCancelledError):
+                await source.pre_send(entry)
+        finally:
+            await broker.shutdown()
+
+    asyncio.run(check())

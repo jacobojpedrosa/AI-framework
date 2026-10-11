@@ -1,0 +1,17 @@
+schema_version: 1
+project:
+  name: persistence-demo
+architecture:
+  golden_path: fullstack-ai
+  hexagonal_services: true
+apps:
+  web:
+    framework: react
+services:
+  api:
+    framework: fastapi
+database:
+  provider: postgres
+  vector: pgvector
+cache:
+  provider: redis

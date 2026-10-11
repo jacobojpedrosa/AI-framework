@@ -1,0 +1,55 @@
+import argparse
+import asyncio
+import json
+import logging
+from dataclasses import asdict
+
+from app.infrastructure.job_registry import REGISTRY
+from app.infrastructure.jobs_runtime import JobsRuntime
+from app.infrastructure.jobs_selection import ADAPTER
+
+
+async def execute(args):
+    if args.area == "jobs" and args.action == "list":
+        return {"jobs": REGISTRY.names(), "adapter": ADAPTER}
+    if args.area == "jobs":
+        REGISTRY.require(args.name)
+    runtime = JobsRuntime()
+    try:
+        if args.area == "schedules":
+            return {
+                "schedules": [asdict(item) for item in await runtime.schedules.list()],
+                "scope": "process-defaults" if ADAPTER == "memory" else "shared-redis",
+            }
+        identifier = await runtime.run.execute(args.name)
+        output = {"task_id": identifier, "status": "queued", "job": args.name}
+        if ADAPTER == "memory":
+            _, result = await runtime.queue.consume_one()
+            output.update(status="completed", result=result, scope="this-process")
+        return output
+    finally:
+        await runtime.close()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    areas = parser.add_subparsers(dest="area", required=True)
+    jobs = areas.add_parser("jobs").add_subparsers(dest="action", required=True)
+    jobs.add_parser("list")
+    jobs.add_parser("run").add_argument("name", choices=REGISTRY.names())
+    areas.add_parser("schedules").add_argument("action", choices=["list"])
+    args = parser.parse_args()
+    previous = logging.root.manager.disable
+    try:
+        logging.disable(logging.CRITICAL)
+        print(json.dumps(asyncio.run(execute(args)), sort_keys=True))
+        return 0
+    except Exception:
+        print(json.dumps({"error": "jobs_unavailable"}))
+        return 1
+    finally:
+        logging.disable(previous)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

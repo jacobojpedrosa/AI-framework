@@ -1,0 +1,23 @@
+resource "google_project_service" "required" {
+  for_each           = toset(["artifactregistry.googleapis.com", "run.googleapis.com", "iam.googleapis.com"])
+  project            = var.project_id
+  service            = each.value
+  disable_on_destroy = false
+}
+
+resource "google_artifact_registry_repository" "images" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = "@@CLOUD_RESOURCE@@"
+  description   = "DEV images for @@PROJECT@@; managed by Terraform"
+  format        = "DOCKER"
+  labels        = { environment = "dev", managed_by = "terraform" }
+  depends_on    = [google_project_service.required]
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+output "image_repository" {
+  value = format("%s-docker.pkg.dev/%s/%s", var.region, var.project_id, google_artifact_registry_repository.images.repository_id)
+}

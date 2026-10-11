@@ -1,0 +1,7 @@
+import os
+
+
+PROVIDER = "STORAGE_PROVIDER_TOKEN"
+ROOT = os.getenv("STORAGE_LOCAL_ROOT", "/app/data/files")
+BUCKET = os.getenv("STORAGE_S3_BUCKET", "")
+MAX_BYTES = int(os.getenv("STORAGE_MAX_BYTES", "25000000"))

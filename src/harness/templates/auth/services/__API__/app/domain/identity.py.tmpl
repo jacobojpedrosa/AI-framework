@@ -1,0 +1,20 @@
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Principal:
+    subject: str
+    roles: frozenset[str] = frozenset()
+    permissions: frozenset[str] = frozenset()
+
+
+def allowed(principal: Principal | None, mode: str, permission: str) -> bool:
+    if principal is None:
+        return False
+    if mode == "authentication":
+        return True
+    if mode == "roles":
+        return "admin" in principal.roles
+    if mode == "permissions":
+        return "admin" in principal.roles and permission in principal.permissions
+    return False

@@ -1,0 +1,91 @@
+from contextlib import contextmanager
+
+from app.adapters.fake_ai import FakeAI
+from app.domain.ai import AIError
+from app.infrastructure.ai_configuration import AISettings, read_settings
+
+
+@contextmanager
+def provider_session(settings: AISettings | None = None):
+    settings = read_settings() if settings is None else settings
+    if settings.provider == "fake":
+        yield FakeAI()
+        return
+    client = None
+    transport = None
+    try:
+        if settings.provider == "openai":
+            from openai import OpenAI
+
+            from app.adapters.openai_ai import OpenAIProvider
+
+            client = OpenAI(
+                api_key=settings.api_key,
+                timeout=20.0,
+                max_retries=0,
+                base_url="https://api.openai.com/v1",
+            )
+            provider = OpenAIProvider(client, settings.model)
+        else:
+            import httpx
+            from google import genai
+            from google.genai import types
+
+            from app.adapters.google_ai import GoogleProvider
+
+            transport = httpx.Client(timeout=20.0)
+            options = types.HttpOptions(
+                api_version="v1",
+                timeout=20000,
+                retry_options=types.HttpRetryOptions(attempts=1),
+                httpx_client=transport,
+            )
+            if settings.provider == "gemini":
+                options.base_url = "https://generativelanguage.googleapis.com"
+                client = genai.Client(
+                    vertexai=False, api_key=settings.api_key, http_options=options
+                )
+            else:
+                import google.auth
+
+                credentials, _ = google.auth.default(
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                host = (
+                    "aiplatform.googleapis.com"
+                    if settings.location == "global"
+                    else settings.location + "-aiplatform.googleapis.com"
+                )
+                options.base_url = "https://" + host
+                client = genai.Client(
+                    vertexai=True,
+                    credentials=credentials,
+                    project=settings.project,
+                    location=settings.location,
+                    http_options=options,
+                )
+            provider = GoogleProvider(client, settings.model, settings.provider)
+    except Exception:
+        try:
+            if client is not None:
+                client.close()
+        finally:
+            if transport is not None:
+                transport.close()
+        raise AIError("configuration") from None
+    try:
+        yield provider
+    finally:
+        try:
+            client.close()
+        finally:
+            if transport is not None:
+                transport.close()
+
+
+class RuntimeAI:
+    """Lazy provider routing; credential discovery happens only on explicit use."""
+
+    def generate(self, request):
+        with provider_session() as provider:
+            return provider.generate(request)

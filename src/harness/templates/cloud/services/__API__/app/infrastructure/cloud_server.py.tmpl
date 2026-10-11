@@ -1,0 +1,34 @@
+"""Cloud entrypoint: same-origin built frontend/API, no development server."""
+
+import os
+from pathlib import Path
+
+import uvicorn
+from fastapi.staticfiles import StaticFiles
+
+from app.infrastructure.bootstrap import create_app
+
+
+def cloud_app(static_directory: Path = Path("/app/static")):
+    app = create_app()
+    # API routes are registered first. StaticFiles returns 404 for unknown paths.
+    app.mount("/", StaticFiles(directory=static_directory, html=True), name="web")
+    return app
+
+
+def main():
+    port = int(os.environ.get("PORT", "8080"))
+    if not 1 <= port <= 65535:
+        raise ValueError("PORT must be between 1 and 65535")
+    uvicorn.run(
+        cloud_app(),
+        host="0.0.0.0",
+        port=port,
+        access_log=False,
+        log_config=str(Path(__file__).with_name("logging.json")),
+        timeout_graceful_shutdown=8,
+    )
+
+
+if __name__ == "__main__":
+    main()

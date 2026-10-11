@@ -1,0 +1,17 @@
+export async function checkApi(signal?: AbortSignal): Promise<string> {
+  const response = await fetch("/api/health", { signal });
+  if (!response.ok)
+    throw new Error("The API is not available. Try again shortly.");
+  const result: unknown = await response.json();
+  if (
+    typeof result !== "object" ||
+    result === null ||
+    !("status" in result) ||
+    result.status !== "ok" ||
+    !("service" in result) ||
+    typeof result.service !== "string"
+  ) {
+    throw new Error("The API returned an unexpected health response.");
+  }
+  return result.service;
+}

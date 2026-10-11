@@ -1,0 +1,9 @@
+architecture:
+  golden_path: ai-service
+  hexagonal_services: true
+project:
+  name: document-api
+schema_version: 1
+services:
+  api:
+    framework: fastapi

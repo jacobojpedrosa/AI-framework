@@ -1,0 +1,69 @@
+import argparse
+import json
+import logging
+import sys
+
+from app.application.generate_text import GenerateText
+from app.domain.ai import AIError, TextRequest
+from app.infrastructure.ai_configuration import read_settings
+from app.infrastructure.ai_runtime import provider_session
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Explicit AI checks and generation")
+    parser.add_argument("operation", choices=["check", "generate"])
+    parser.add_argument("--remote", action="store_true", help="Check remote model metadata access")
+    parser.add_argument("--live", action="store_true", help="Authorize a billable real generation")
+    args = parser.parse_args()
+    # SDK debug logs are not part of diagnostic output and may contain request data.
+    previous_logging_level = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        settings = read_settings()
+        if args.operation == "check":
+            if args.remote:
+                with provider_session(settings) as provider:
+                    provider.check_remote()
+            print(
+                json.dumps(
+                    {
+                        "configuration": "ok",
+                        "provider": settings.provider,
+                        "remote": (
+                            "not_applicable"
+                            if settings.provider == "fake"
+                            else "metadata_access_ok"
+                            if args.remote
+                            else "not_checked"
+                        ),
+                    }
+                )
+            )
+        else:
+            if settings.provider != "fake" and not args.live:
+                raise AIError("configuration")
+            prompt = sys.stdin.read(16001)
+            request = TextRequest(prompt)
+            with provider_session(settings) as provider:
+                result = GenerateText(provider).execute(request)
+            print(
+                json.dumps(
+                    {"text": result.text, "provider": result.provider, "model": result.model}
+                )
+            )
+        return 0
+    except AIError as error:
+        print(json.dumps({"status": "error", "code": error.code}))
+        return 1
+    except ValueError:
+        print(json.dumps({"status": "error", "code": "invalid_request"}))
+        return 1
+    except Exception:
+        print(json.dumps({"status": "error", "code": "unavailable"}))
+        return 1
+    finally:
+        logging.disable(previous_logging_level)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

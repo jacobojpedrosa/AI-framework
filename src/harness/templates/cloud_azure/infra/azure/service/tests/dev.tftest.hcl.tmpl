@@ -1,0 +1,31 @@
+mock_provider "azurerm" {}
+variables {
+  subscription_id = "00000000-0000-0000-0000-000000000000"
+  tenant_id       = "00000000-0000-0000-0000-000000000000"
+  container_image = "@@AZURE_REGISTRY@@00000000.azurecr.io/application@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}
+run "internal_service_plan" {
+  command = plan
+  assert {
+    condition     = azurerm_container_app.app.ingress[0].external_enabled == false && azurerm_container_app.app.ingress[0].allow_insecure_connections == false
+    error_message = "Ingress must stay internal and HTTPS."
+  }
+  assert {
+    condition     = azurerm_container_app.app.template[0].max_replicas == 2 && azurerm_container_app.app.template[0].container[0].memory == "2Gi"
+    error_message = "Use bounded replicas and a valid Consumption CPU/memory pair."
+  }
+  assert {
+    condition     = azurerm_container_app.app.registry[0].identity == local.identity_id
+    error_message = "Pull images with the dedicated identity."
+  }
+}
+run "reject_mutable_image" {
+  command = plan
+  variables { container_image = "@@AZURE_REGISTRY@@00000000.azurecr.io/application:dev" }
+  expect_failures = [var.container_image]
+}
+run "reject_other_registry" {
+  command = plan
+  variables { container_image = "untrusted.azurecr.io/application@sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+  expect_failures = [var.container_image]
+}

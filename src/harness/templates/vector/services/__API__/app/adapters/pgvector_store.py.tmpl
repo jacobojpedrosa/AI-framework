@@ -1,0 +1,53 @@
+import json
+
+from sqlalchemy import Engine, text
+
+from app.domain.records import validate_key
+from app.domain.vectors import Match, validate_embedding, validate_limit, validate_vector
+
+
+class PgVectorStore:
+    def __init__(self, engine: Engine, namespace: str = "app") -> None:
+        validate_key(namespace)
+        self.engine = engine
+        self.namespace = namespace
+
+    def put(self, key: str, vector: tuple[float, ...]) -> None:
+        validate_embedding(key, vector)
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO harness_vectors (namespace, key, embedding) "
+                    "VALUES (:namespace, :key, CAST(:vector AS vector)) "
+                    "ON CONFLICT (namespace, key) DO UPDATE SET embedding = excluded.embedding"
+                ),
+                {"namespace": self.namespace, "key": key, "vector": json.dumps(vector)},
+            )
+
+    def nearest(self, vector: tuple[float, ...], limit: int = 10) -> list[Match]:
+        validate_vector(vector)
+        validate_limit(limit)
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT key, embedding <-> CAST(:vector AS vector) AS distance "
+                    "FROM harness_vectors WHERE namespace=:namespace "
+                    'ORDER BY distance, key COLLATE "C" LIMIT :limit'
+                ),
+                {"namespace": self.namespace, "vector": json.dumps(vector), "limit": limit},
+            ).all()
+        return [Match(row[0], row[1]) for row in rows]
+
+    def delete(self, key: str) -> bool:
+        validate_key(key)
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                text("DELETE FROM harness_vectors WHERE namespace=:namespace AND key=:key"),
+                {"namespace": self.namespace, "key": key},
+            )
+            return result.rowcount == 1
+
+    def check(self) -> bool:
+        with self.engine.connect() as connection:
+            connection.execute(text("SELECT embedding FROM harness_vectors LIMIT 0"))
+        return True

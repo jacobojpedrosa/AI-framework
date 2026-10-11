@@ -1,0 +1,101 @@
+"""Bounded deterministic eval hooks through TextProvider; no Harness runtime dependency."""
+
+import argparse
+import hashlib
+import json
+import logging
+import time
+from pathlib import Path
+
+from app.domain.ai import TextRequest
+from app.infrastructure.ai_configuration import read_settings
+from app.infrastructure.ai_runtime import provider_session
+
+
+def load_dataset(path):
+    with Path(path).open("rb") as stream:
+        raw = stream.read(262145)
+    if len(raw) > 262144:
+        raise ValueError("dataset too large")
+    data = json.loads(raw)
+    if data.get("schema_version") != 1 or not isinstance(data.get("cases"), list):
+        raise ValueError("invalid dataset")
+    if not 1 <= len(data["cases"]) <= 50:
+        raise ValueError("invalid case count")
+    identifiers = set()
+    for case in data["cases"]:
+        if set(case) != {"id", "prompt", "expected", "max_output_tokens"}:
+            raise ValueError("invalid case")
+        identifier = case["id"]
+        if not isinstance(identifier, str) or not identifier.isidentifier() or len(identifier) > 64:
+            raise ValueError("invalid identifier")
+        if identifier in identifiers or not isinstance(case["expected"], str):
+            raise ValueError("invalid expected value")
+        identifiers.add(identifier)
+        TextRequest(case["prompt"], case["max_output_tokens"])
+    return data["cases"], hashlib.sha256(raw).hexdigest()
+
+
+def evaluate(provider, cases, grader=None):
+    """A project may supply a local grader; CLI defaults to exact string equality."""
+    grader = grader or (lambda actual, expected: actual == expected)
+    results = []
+    for case in cases:
+        started = time.perf_counter()
+        try:
+            response = provider.generate(TextRequest(case["prompt"], case["max_output_tokens"]))
+            passed = bool(grader(response.text, case["expected"]))
+            status = "pass" if passed else "fail"
+        except Exception:
+            status = "error"
+        results.append(
+            {
+                "id": case["id"],
+                "status": status,
+                "latency_ms": round((time.perf_counter() - started) * 1000, 3),
+            }
+        )
+    return results
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("dataset", type=Path)
+    parser.add_argument(
+        "--live", action="store_true", help="Authorize bounded billable generations"
+    )
+    args = parser.parse_args()
+    previous = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        cases, checksum = load_dataset(args.dataset)
+        settings = read_settings()
+        if settings.provider != "fake" and not args.live:
+            raise ValueError("live approval required")
+        with provider_session(settings) as provider:
+            results = evaluate(provider, cases)
+        passed = all(case["status"] == "pass" for case in results)
+        print(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "provider": settings.provider,
+                    "model": settings.model,
+                    "dataset_sha256": checksum,
+                    "synthetic": settings.provider == "fake",
+                    "grader": "exact_match",
+                    "status": "pass" if passed else "fail",
+                    "cases": results,
+                }
+            )
+        )
+        return 0 if passed else 1
+    except Exception:
+        print(json.dumps({"status": "error", "code": "evaluation_failed"}))
+        return 1
+    finally:
+        logging.disable(previous)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,131 @@
+# Azure DEV infrastructure
+
+This experimental stateless path serves compiled React and FastAPI from the same
+linux/amd64 image. The Core and application are independent of Azure SDKs.
+Terraform 1.15.8 (BSL 1.1) and hashicorp/azurerm 5.9.0 (MPL 2.0) are pinned;
+provider checksums cover darwin_arm64 and linux_amd64.
+
+## Access and limits
+
+The Container App has **internal ingress only**: requests must originate from
+another app in the same Container Apps environment. HTTPS is required. The URL
+is not directly accessible from your browser or the public internet. This is
+network isolation, not user authentication, and differs from GCP's IAM invokers.
+Do not place untrusted apps in this environment. Entra ID login, external ingress,
+VNet connectivity and public browser access are outside this initial renderer.
+Use the local Compose workflow for browser development. For a deployed health check,
+an authorized operator needs a client in the same environment; creating that client
+is an explicit additional operation, not something this scaffold does automatically.
+
+The image-pull user-assigned identity gets AcrPull only on this registry. Registry
+admin credentials are disabled. That identity is attached to the app and can be
+used by its code; do not grant it extra permissions unintentionally. No application
+database, storage, cache, AI, auth/admin, worker or scheduler is generated.
+
+Consumption uses 1 vCPU with 2 GiB (a valid Azure CPU/memory pair), min 0/max 2
+replicas and HTTP scaling at 40 concurrent requests. This is not a spending cap.
+Console telemetry is streamed via Container Apps logs; no retained Log Analytics
+workspace, Application Insights or collector is configured. Artifact Registry's
+Azure equivalent, ACR, remains a billable provisioned resource even with zero apps.
+
+## Local verification
+
+From the generated project root:
+
+```bash
+terraform fmt -check -recursive infra/azure
+terraform -chdir=infra/azure/bootstrap init -backend=false -lockfile=readonly
+terraform -chdir=infra/azure/bootstrap validate
+terraform -chdir=infra/azure/bootstrap test
+terraform -chdir=infra/azure/service init -backend=false -lockfile=readonly
+terraform -chdir=infra/azure/service validate
+terraform -chdir=infra/azure/service test
+make cloud-build
+docker run --rm -p 127.0.0.1:8080:8080 harness-cloud-dev
+```
+
+Terraform tests run plan operations using a **mock provider**. They check expressions,
+schema and safety properties, not Azure credentials, resource availability, quotas,
+policies, actual image pulls or successful deployment. Real AzureRM plans require
+authentication and are a separate step. The smoke script never runs apply.
+
+## Authorized deployment
+
+Choose an explicitly authorized disposable subscription and tenant. Do not use the
+active CLI subscription implicitly. Authenticate outside Terraform (Azure CLI login
+for that tenant or your organization's workload identity); never store secrets in
+HCL, tfvars or project.yaml. The operator needs resource creation rights plus scoped
+role-assignment rights for AcrPull; image publishers need registry push permission.
+Register Microsoft.App, Microsoft.ContainerRegistry, Microsoft.ManagedIdentity and
+required platform dependencies in the authorized subscription beforehand. Provider
+auto-registration is disabled, so planning does not register providers automatically.
+
+Both roots default to local state. For shared use, create a restricted Azure Blob
+backend separately, enable versioning, and copy each backend.tf.example to backend.tf
+with distinct keys BEFORE init. Authenticate using Entra ID; no account keys are
+embedded. Back up state and treat it as sensitive. Git and Docker exclude state,
+plans and private tfvars.
+
+### 1. Bootstrap
+
+Copy bootstrap/dev.tfvars.example to bootstrap/terraform.tfvars and replace the
+fictitious subscription_id and tenant_id. Select a supported location. Run:
+
+```bash
+terraform -chdir=infra/azure/bootstrap init -lockfile=readonly
+terraform -chdir=infra/azure/bootstrap plan -out=bootstrap.tfplan
+# Review the concrete resources, permissions and costs in your authorized scope.
+terraform -chdir=infra/azure/bootstrap apply bootstrap.tfplan
+terraform -chdir=infra/azure/bootstrap output -raw registry_name
+terraform -chdir=infra/azure/bootstrap output -raw image_repository
+```
+
+Bootstrap creates the resource group, ACR, identity, scoped pull role and Consumption
+environment. ACR names incorporate the project hash and subscription prefix but are
+globally unique: a name collision still needs explicit resolution. Do not import or
+replace unrelated resources. Identity and role propagation may take time.
+
+### 2. Publish the image
+
+Use the real registry output and explicit subscription:
+
+```bash
+az acr login --name REGISTRY_NAME --subscription SUBSCRIPTION_ID
+docker buildx build --platform linux/amd64 -f Dockerfile.cloud \
+  -t REGISTRY_NAME.azurecr.io/application:dev --push .
+```
+
+Use the published registry digest, not the local image ID. Copy service/dev.tfvars.example
+to service/terraform.tfvars; use the SAME subscription, tenant and location as bootstrap,
+and set container_image to REGISTRY_NAME.azurecr.io/application@sha256:ACTUAL_DIGEST.
+The fake example digest must never be deployed.
+
+### 3. Deploy the internal service
+
+```bash
+terraform -chdir=infra/azure/service init -lockfile=readonly
+terraform -chdir=infra/azure/service plan -out=service.tfplan
+# Review, then apply only the reviewed plan.
+terraform -chdir=infra/azure/service apply service.tfplan
+terraform -chdir=infra/azure/service output -raw internal_url
+```
+
+Service inputs reference bootstrap resources by their deterministic IDs; no remote
+state credentials are shared. Changing project name or subscription changes those
+IDs. Bootstrap must exist first. No placeholder image is deployed. Check health,
+readiness and the built web from the same environment, and inspect console logs with
+`az containerapp logs show` using explicit subscription/resource-group/name.
+
+## Cleanup
+
+Resources use prevent_destroy to stop accidental deletion. For an authorized cleanup,
+intentionally remove that lifecycle protection on the service and review its destroy
+plan first. Then do the same for bootstrap only when no app depends on it and its
+images may be removed. Never delete the subscription or unrelated resource groups.
+CI/CD, retained telemetry, production hardening and remote deployment verification
+are outside this initial path. Scaffolding itself only writes files.
+
+Sources: [internal ingress](https://learn.microsoft.com/azure/container-apps/ingress),
+[managed image pulls](https://learn.microsoft.com/azure/container-apps/managed-identity-image-pull),
+[container resources](https://learn.microsoft.com/azure/container-apps/containers),
+[AzureRM](https://registry.terraform.io/providers/hashicorp/azurerm/5.9.0/docs).

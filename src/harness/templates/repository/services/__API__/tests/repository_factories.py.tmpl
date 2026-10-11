@@ -1,0 +1,8 @@
+import pytest
+
+from app.adapters.memory_repository import MemoryRepository
+
+
+@pytest.fixture(params=["memory"])
+def repository(request):
+    yield MemoryRepository()

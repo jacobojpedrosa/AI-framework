@@ -1,0 +1,99 @@
+# Production readiness — @@PROJECT@@
+
+This scaffold is a starting point, not production certification. Keep a named
+owner, environment, release commit/image digest, date and supporting artifacts
+for every check below. Record actual evidence, never copy example successes.
+
+## Required review
+
+- Identity and access: verify login, expired credentials, denied roles, CSRF,
+  session cookie settings and admin isolation using the deployed identity system.
+- Secrets and TLS: secret manager delivery, rotation, least privilege, HTTPS,
+  trusted proxy handling, network isolation and no credentials in logs or images.
+- Dependencies: run CI audits and review findings for this exact image/lock set.
+- Restore drill: restore a recent encrypted backup into an isolated environment;
+  verify data integrity and record measured RPO/RTO against agreed objectives.
+- Migrations: rehearse against a representative restored database, review locks,
+  duration, disk growth, multiple heads and compatibility with the previous app.
+- Deployment rollback: retain the last healthy revision and immutable image digest;
+  rehearse restoring traffic, checking health and user flows, with a named owner.
+- Monitoring: verify trace/log delivery, cardinality and redaction, alert routing,
+  on-call ownership and actionable error/latency thresholds.
+- Performance: measure representative requests, concurrency, percentiles, error
+  rate and resource use in staging. Define SLOs before using a pass/fail budget.
+- Tests: unit, contracts, integration and real user-flow E2E for the release.
+- Release approval: reviewer, release identity, rollback criteria and change window.
+- AI if enabled: representative domain dataset, task quality, unsafe-input cases,
+  refusals, privacy, latency and cost. Fake evals only test the evaluation plumbing.
+
+`harness readiness --project .` inventories `.harness/readiness/<check>.json`
+and doctor findings in read-only mode. Required record keys: `schema_version: 1`,
+`check`, `status` (`pass` or `fail`), `reviewer`, `scope`, `recorded_at`,
+`manifest_sha256` (SHA-256 of `.harness/scaffold.json`). Timestamps must have a
+timezone and be within the previous 30 days; this is an inventory freshness
+limit, not a guarantee that evidence remains valid after an environment change.
+Check IDs: identity_access, secrets_tls, dependency_audit, restore_drill,
+migration_rehearsal, deployment_rollback, monitoring_alerts, performance,
+tests_contracts_e2e, release_approval, and ai_quality when AI is configured.
+Include artifact references and release identity in scope; use an ISO date/time.
+These are operator attestations: the CLI cannot verify their truth, currency or
+coverage. Even a complete inventory requires independent review and never
+authorizes production. Missing or failed records block readiness.
+
+## Backup and migration safety
+
+PostgreSQL: choose logical dump, physical backup/PITR or managed backup according
+to the agreed RPO/RTO. Encrypt and restrict backups; retain keys, roles and required
+extensions. Test restore with compatible tooling and a separate target. A successful
+backup command alone does not prove recoverability. SQLite: use its backup API or
+a consistent stopped snapshot; copying an active database file alone is insufficient.
+Memory adapters have no durable data and must not be used for durable workloads.
+
+Before migration: review the revision graph and generated SQL where supported;
+take and verify a recoverable backup; rehearse on a restored staging copy; estimate
+locks and duration; arrange an abort threshold and maintenance window if needed.
+Use expand/contract changes: add compatible schema, deploy/backfill, verify, and
+remove old schema only in a later approved release. Do not run destructive changes
+as application startup. Existing `make migrate` is an explicit execution command,
+not a dry run or an approval boundary. The caller must use the intended environment.
+PostgreSQL migrations serialize via an advisory transaction lock, but this does
+not establish a safe lock duration or make every DDL operation reversible.
+
+Application rollback and database rollback are separate decisions. Do not run an
+automatic downgrade after a failed deployment. Prefer a forward repair when safe;
+restoration can lose writes after the backup and requires an explicit recovery plan.
+
+## Deployment rollback
+
+For GCP Cloud Run: preserve the prior healthy revision and shift traffic back after
+confirming its image, configuration and schema compatibility. For Azure Container
+Apps: preserve a healthy revision; use the configured revision mode and traffic
+weights to restore it. Do not assume a single-revision deployment retains an active
+fallback. Internal Azure ingress requires a validation runner with network access.
+In both: freeze promotion, identify the failing release, restore the reviewed
+revision/traffic, verify health plus user flows, watch errors/latency, and record
+the incident. Do not recreate infrastructure or restore a database blindly.
+No command in this guide performs a deployment.
+
+## Local baseline and AI hooks
+
+Run `python scripts/performance_baseline.py http://127.0.0.1:8000 --samples 20
+--budget-ms 1000` as one command. It performs bounded sequential health GETs,
+reports p50/p95 and failures, refuses remote hosts and redirects, and never proves
+production capacity. The default budget is illustrative, not a product SLO.
+
+If AI is enabled, from `services/@@API@@` run
+`AI_PROVIDER=fake python -m app.infrastructure.ai_evals evals/smoke.json` when the
+fake provider is configured. The bundled synthetic dataset checks exact matching.
+Replace it with reviewed domain cases; `evaluate(provider, cases, grader)` supports
+a local grader through the existing TextProvider port. No Harness runtime import.
+Live providers require `--live`, configured credentials and a reviewed dataset;
+each run is bounded to 50 requests and 2048 output tokens per request. Actual cost
+depends on model/input usage. Reports omit prompts, responses and provider errors.
+
+## References reviewed 2026-10-10
+
+- https://www.postgresql.org/docs/16/backup.html
+- https://alembic.sqlalchemy.org/en/latest/cookbook.html
+- https://docs.cloud.google.com/run/docs/managing/revisions
+- https://learn.microsoft.com/en-us/azure/container-apps/revisions

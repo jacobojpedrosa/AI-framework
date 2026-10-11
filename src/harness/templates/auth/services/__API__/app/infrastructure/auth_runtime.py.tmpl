@@ -1,0 +1,102 @@
+import hmac
+import secrets
+import time
+from collections import deque
+from dataclasses import asdict
+from threading import Lock
+
+from app.adapters.local_identity import verify_password
+from app.domain.identity import Principal, allowed
+from app.infrastructure.auth_selection import AUTHORIZATION
+from app.infrastructure.auth_settings import AuthSettings, load_settings
+
+
+class LoginLimiter:
+    """Bounded process-wide budget; deploy a shared ingress limit with multiple workers."""
+
+    def __init__(self):
+        self.attempts = deque(maxlen=20)
+        self.lock = Lock()
+
+    def admit(self) -> bool:
+        with self.lock:
+            now = time.monotonic()
+            while self.attempts and self.attempts[0] <= now - 60:
+                self.attempts.popleft()
+            if len(self.attempts) >= 20:
+                return False
+            self.attempts.append(now)
+            return True
+
+
+class AuthRuntime:
+    def __init__(self, settings: AuthSettings | None = None):
+        self.settings = settings or load_settings()
+        self.limiter = LoginLimiter()
+        self.verifier = None
+        self.oauth = None
+        if self.settings.configured() and self.settings.provider == "firebase":
+            from app.adapters.jwt_identity import FirebaseVerifier
+
+            self.verifier = FirebaseVerifier(self.settings.firebase_project)
+        if self.settings.configured() and self.settings.provider == "oidc":
+            from authlib.integrations.starlette_client import OAuth
+
+            self.oauth = OAuth()
+            self.oauth.register(
+                "identity",
+                client_id=self.settings.client_id,
+                client_secret=self.settings.client_secret,
+                server_metadata_url=self.settings.issuer + "/.well-known/openid-configuration",
+                client_kwargs={
+                    "scope": "openid profile email",
+                    "code_challenge_method": "S256",
+                    "timeout": 10,
+                    "trust_env": False,
+                },
+                claims_options={"iss": {"essential": True, "value": self.settings.issuer}},
+            )
+
+    def check(self) -> bool:
+        return self.settings.configured()
+
+    def local_login(self, username: str, password: str) -> Principal | None:
+        if not self.check() or self.settings.provider != "local":
+            return None
+        valid = verify_password(password, self.settings.password_hash)
+        if not valid or not hmac.compare_digest(username.encode(), self.settings.username.encode()):
+            return None
+        return Principal(username, self.settings.roles, self.settings.permissions)
+
+    def establish(self, request, principal: Principal, expires: int) -> None:
+        request.session.clear()
+        data = asdict(principal)
+        data["roles"] = sorted(principal.roles)
+        data["permissions"] = sorted(principal.permissions)
+        request.session.update(
+            identity=data,
+            expires=min(expires, int(time.time()) + 900),
+            csrf=secrets.token_urlsafe(32),
+        )
+
+    def principal(self, request) -> Principal | None:
+        if not self.check() or request.session.get("expires", 0) <= time.time():
+            return None
+        data = request.session.get("identity")
+        if not isinstance(data, dict) or not data.get("subject"):
+            return None
+        if self.settings.provider == "local":
+            if data["subject"] != self.settings.username:
+                return None
+            return Principal(self.settings.username, self.settings.roles, self.settings.permissions)
+        return Principal(data["subject"], frozenset(data["roles"]), frozenset(data["permissions"]))
+
+    def admin_allowed(self, principal: Principal | None, permission="admin:access") -> bool:
+        if principal is None:
+            return False
+        if (
+            self.settings.provider != "local"
+            and principal.subject not in self.settings.admin_subjects
+        ):
+            return False
+        return allowed(principal, AUTHORIZATION, permission)

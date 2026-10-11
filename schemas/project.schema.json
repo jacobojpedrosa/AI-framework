@@ -1,0 +1,519 @@
+{
+  "$defs": {
+    "AI": {
+      "additionalProperties": false,
+      "properties": {
+        "providers": {
+          "items": {
+            "enum": [
+              "fake",
+              "openai",
+              "gemini",
+              "vertex"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Providers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "title": "AI",
+      "type": "object"
+    },
+    "Admin": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "provider": {
+          "const": "starlette-admin",
+          "default": "starlette-admin",
+          "title": "Provider",
+          "type": "string"
+        },
+        "resources": {
+          "items": {
+            "maxLength": 63,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "title": "Resources",
+          "type": "array"
+        }
+      },
+      "title": "Admin",
+      "type": "object"
+    },
+    "Architecture": {
+      "additionalProperties": false,
+      "properties": {
+        "golden_path": {
+          "enum": [
+            "simple-web",
+            "ai-service",
+            "fullstack-ai",
+            "service-platform"
+          ],
+          "title": "Golden Path",
+          "type": "string"
+        },
+        "hexagonal_services": {
+          "default": true,
+          "title": "Hexagonal Services",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "golden_path"
+      ],
+      "title": "Architecture",
+      "type": "object"
+    },
+    "Auth": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "local",
+            "oidc",
+            "firebase"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "authorization": {
+          "default": "authentication",
+          "enum": [
+            "authentication",
+            "roles",
+            "permissions"
+          ],
+          "title": "Authorization",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "title": "Auth",
+      "type": "object"
+    },
+    "Cache": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "const": "redis",
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "title": "Cache",
+      "type": "object"
+    },
+    "Cloud": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "gcp",
+            "aws",
+            "azure"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "target": {
+          "enum": [
+            "cloud-run",
+            "ecs",
+            "container-apps"
+          ],
+          "title": "Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "target"
+      ],
+      "title": "Cloud",
+      "type": "object"
+    },
+    "Database": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "memory",
+            "sqlite",
+            "postgres"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "vector": {
+          "anyOf": [
+            {
+              "const": "pgvector",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vector"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "title": "Database",
+      "type": "object"
+    },
+    "IaC": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "const": "terraform",
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "title": "IaC",
+      "type": "object"
+    },
+    "Jobs": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "adapter": {
+          "default": "memory",
+          "enum": [
+            "memory",
+            "taskiq"
+          ],
+          "title": "Adapter",
+          "type": "string"
+        },
+        "broker": {
+          "anyOf": [
+            {
+              "const": "redis",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Broker"
+        }
+      },
+      "title": "Jobs",
+      "type": "object"
+    },
+    "Observability": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "const": "opentelemetry",
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "title": "Observability",
+      "type": "object"
+    },
+    "Project": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 63,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Project",
+      "type": "object"
+    },
+    "Scheduler": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "adapter": {
+          "default": "memory",
+          "enum": [
+            "memory",
+            "taskiq"
+          ],
+          "title": "Adapter",
+          "type": "string"
+        },
+        "store": {
+          "anyOf": [
+            {
+              "const": "redis",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Store"
+        }
+      },
+      "title": "Scheduler",
+      "type": "object"
+    },
+    "Service": {
+      "additionalProperties": false,
+      "properties": {
+        "framework": {
+          "const": "fastapi",
+          "title": "Framework",
+          "type": "string"
+        }
+      },
+      "required": [
+        "framework"
+      ],
+      "title": "Service",
+      "type": "object"
+    },
+    "Storage": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "local",
+            "s3",
+            "gcs",
+            "azure-blob"
+          ],
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "title": "Storage",
+      "type": "object"
+    },
+    "WebApp": {
+      "additionalProperties": false,
+      "properties": {
+        "framework": {
+          "enum": [
+            "react",
+            "next"
+          ],
+          "title": "Framework",
+          "type": "string"
+        }
+      },
+      "required": [
+        "framework"
+      ],
+      "title": "WebApp",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "project": {
+      "$ref": "#/$defs/Project"
+    },
+    "architecture": {
+      "$ref": "#/$defs/Architecture"
+    },
+    "apps": {
+      "patternProperties": {
+        "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$": {
+          "$ref": "#/$defs/WebApp"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 63
+      },
+      "title": "Apps",
+      "type": "object"
+    },
+    "services": {
+      "patternProperties": {
+        "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$": {
+          "$ref": "#/$defs/Service"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 63
+      },
+      "title": "Services",
+      "type": "object"
+    },
+    "database": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Database"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "cache": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Cache"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "ai": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AI"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "storage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Storage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "auth": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Auth"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "admin": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Admin"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "jobs": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Jobs"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "scheduler": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Scheduler"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "observability": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Observability"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "cloud": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Cloud"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "iac": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IaC"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "schema_version",
+    "project",
+    "architecture"
+  ],
+  "title": "ProjectConfig",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

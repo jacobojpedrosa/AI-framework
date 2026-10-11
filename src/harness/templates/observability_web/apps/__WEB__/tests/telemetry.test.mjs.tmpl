@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import { afterEach, mock, test } from "node:test";
+import { tracedHealthFetch } from "../src/telemetry.ts";
+
+afterEach(() => mock.restoreAll());
+
+test("web span propagates W3C context and logs the matching client span", async () => {
+  let parent;
+  mock.method(globalThis, "fetch", async (url, options) => {
+    assert.equal(url, "/api/health");
+    parent = options.headers.traceparent;
+    assert.match(parent, /^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);
+    assert.ok(options.headers["x-request-id"]);
+    return new Response("{}");
+  });
+  const log = mock.method(console, "info", () => {});
+  await tracedHealthFetch();
+  await new Promise((resolve) => setImmediate(resolve));
+  const exported = JSON.parse(log.mock.calls[0].arguments[0]);
+  assert.equal(exported.trace_id, parent.split("-")[1]);
+  assert.equal(exported.span_id, parent.split("-")[2]);
+});
+
+test("failed fetch ends a sanitized error span", async () => {
+  mock.method(globalThis, "fetch", async () => {
+    throw new Error("secret-token");
+  });
+  const log = mock.method(console, "info", () => {});
+  await assert.rejects(tracedHealthFetch());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(JSON.parse(log.mock.calls[0].arguments[0]).status, 2);
+  assert.ok(!log.mock.calls[0].arguments[0].includes("secret-token"));
+});

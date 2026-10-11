@@ -1,0 +1,100 @@
+# GitHub Actions: validation and explicit deployments
+
+CI runs on pull requests and pushes to develop/main with contents:read only.
+It installs locked application dependencies, runs lint, API tests (including contracts),
+web tests/build, tracked-secret checks, pip-audit, npm audit and Docker builds.
+Cloud projects additionally validate Terraform and run mock-provider plan tests.
+Actions are pinned to commit SHAs in .github/action-pins.json. Audit database/network
+failures fail the job; findings are not silently ignored. This baseline does not
+replace a full secret scanner, integration testing against real providers or review.
+
+Local projects have validation only. Cloud projects also receive DEV and manual PROD
+jobs, disabled until repository variables DEV_DEPLOY_ENABLED / PROD_DEPLOY_ENABLED
+are set to the exact value true. Credentials are unavailable to PR validation jobs.
+Never enable a deployment by switching to pull_request_target or running PR code
+on a privileged runner. Protect develop/main and review workflow/script changes.
+
+## Provisioning and image ownership
+
+Provision infrastructure first using the reviewed Terraform instructions in infra/.
+The generated infrastructure is DEV only: production infrastructure must be separately
+reviewed and provisioned with distinct state, identities, target resources and an
+environment=prod label/tag. Never point PROD at DEV. The workflow checks that label
+before updating an existing service; it cannot create a missing service.
+
+Terraform owns service configuration; CI/CD owns its image after initial provisioning.
+The Terraform service resource ignores image changes so later configuration applies
+do not roll back a deployed revision. Change images through this pipeline or an
+explicitly reviewed operational procedure. No unattended Terraform apply is generated:
+bootstrap, permissions and infrastructure changes retain their own plan/review/apply.
+
+DEV builds the validated commit before authentication, publishes it under its commit
+SHA, resolves the registry digest, then deploys by digest. PROD never rebuilds: manual
+workflow_dispatch on main requires image_digest (sha256 plus 64 lowercase hex digits)
+already published and reviewed in the PROD registry. Copying/promoting an image to
+that registry remains a separately authorized step. A push/merge to main alone cannot
+trigger production. Both stages serialize deployments and check readiness and health
+after verifying that the newly created revision is ready. GCP moves 100% of traffic
+to the latest revision; Azure
+requires Single revision mode. Canary/multi-revision promotion is outside this path.
+Failure does not trigger an automatic rollback; inspect the revision and manually
+redeploy a known good digest.
+
+## GitHub Environment configuration
+
+Create separate dev and prod GitHub Environments. Configure prod with required
+reviewers, prevent self-review, disallow admin bypass, and a custom deployment branch
+policy containing only the branch main. Configure dev to allow develop only.
+Merely naming an environment in YAML does not create those protections.
+
+PROD checks the GitHub.com REST API before cloud authentication and fails closed if
+protection cannot be verified. Set its environment secret ENVIRONMENT_READ_TOKEN to
+a narrowly scoped GitHub App installation token or fine-grained token with repository
+administration read access. No write permission is needed. Some GitHub plans/repository
+visibilities do not support these protections; PROD remains blocked in that case.
+This check targets GitHub.com; GitHub Enterprise Server needs an explicitly reviewed
+API-host adaptation. The token is supplied only to the guard step.
+
+Cloud authentication uses OIDC only, with environment-specific federation trust for
+repo:OWNER/REPO:environment:dev or :prod. Restrict repository, environment and branch
+claims according to provider support. Do not store cloud credential keys in GitHub.
+Grant deployment identities only image publishing (DEV), service update/read and the
+specific identity/invocation permissions needed for health checks. Use separate PROD
+identities. Production registry publication rights are not required for this job.
+
+Environment variables shared by cloud jobs:
+
+- IMAGE_REPOSITORY: full registry/repository path ending in /application, without tag.
+- DEPLOY_SERVICE: existing service name. Its environment label/tag must equal dev/prod.
+
+For GCP also configure GCP_PROJECT, GCP_REGION, GCP_SERVICE_ACCOUNT and
+GCP_WORKLOAD_IDENTITY_PROVIDER. The service account must be allowed to deploy using
+the runtime identity, invoke the service and mint the audience-specific identity
+token used for health checks (including the required token-creator impersonation
+permission). The service must retain IAM checking and no public IAM members.
+
+For Azure configure AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
+AZURE_RESOURCE_GROUP and AZURE_REGISTRY_NAME. IMAGE_REPOSITORY must match that ACR.
+Azure deployment jobs require a dedicated ephemeral Linux x64 self-hosted runner
+labelled harness-azure-internal, with Python 3.12 and Azure CLI installed and network
+access FROM THE SAME Container Apps environment. A public GitHub-hosted runner cannot
+perform the internal HTTP checks. Azure DEV builds/publishes in a separate hosted job
+and passes only its immutable digest to the internal deployment job; that runner
+does not need a Docker daemon. Isolate runners by environment and repository;
+never share them with untrusted pull-request jobs. The generated runner label needs
+an environment-specific runner group policy in GitHub. Missing connectivity makes
+health checks fail; the workflow never opens ingress to work around it.
+
+## What is and is not verified
+
+Generation and local workflow validation do not configure GitHub branch protection,
+environments, runner groups, OIDC trust or cloud permissions. Those need verification
+in the actual repository/account before setting deployment flags. No remote workflow
+run, cloud deployment or security-clean status is implied by generating these files.
+Generated application tests include their existing optional-provider limitations;
+enable real integration tests separately where external systems are required.
+
+References: https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments
+https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-cloud-providers
+https://github.com/google-github-actions/auth
+https://github.com/Azure/login

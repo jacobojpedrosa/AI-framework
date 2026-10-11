@@ -1,0 +1,37 @@
+# Authentication and explicit administration
+
+Set a random `AUTH_SESSION_SECRET` of at least 32 characters. No user or password is
+provided by default. Missing authentication configuration makes login return 503.
+
+For local development, set `AUTH_LOCAL_USERNAME`, `AUTH_LOCAL_PASSWORD_HASH`,
+`AUTH_LOCAL_ROLES` and `AUTH_LOCAL_PERMISSIONS`. Generate a password hash with
+`python -m app.adapters.local_identity` inside the generated service environment;
+the password is read interactively and is not a command-line argument. The hash format
+uses colons, so it does not trigger Compose dollar interpolation. Over local HTTP,
+explicitly set `AUTH_COOKIE_SECURE=false`. Use the default `true` with HTTPS.
+
+Sign in at `/auth/login`. Authentication uses signed, readable session cookies with
+a maximum lifetime of 15 minutes; tokens and passwords are not stored in them. Logging
+out clears the browser cookie; it does not revoke a previously stolen stateless cookie.
+Do not put confidential profile data in session fields. Local login has a process-wide
+attempt budget; multiple workers require a shared ingress rate limit.
+
+The authorization modes are `authentication`, `roles` (admin role), and `permissions`
+(admin role plus named permission). Admin always needs authentication and only the
+resources selected in `admin.resources` are registered. In permissions mode grant
+`admin:access` and the relevant `records:read`, `records:write`, `records:delete`,
+`schedules:read` or `schedules:write` permissions. Mutating admin forms require CSRF.
+
+OIDC uses Authlib's authorization-code flow with state, nonce and PKCE. Configure
+`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and the explicit HTTPS
+`OIDC_REDIRECT_URI` ending in `/auth/callback`. Remote admin identities must appear in
+`AUTH_ADMIN_SUBJECTS`; roles and permissions come from verified issuer claims.
+
+Firebase uses the Google sign-in web flow and verifies Firebase ID tokens with RS256
+and Google's public JWKS, including issuer, audience, expiry and auth_time. Configure
+`FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`, `FIREBASE_AUTH_DOMAIN` and allowed admin
+subjects. Enable Google sign-in and the application's domain in Firebase. The web API
+key is public Firebase client configuration, not a server service-account credential.
+This adapter does not check Firebase account revocation/disablement on every request;
+short session expiration is enforced. External identity flows need verification with
+your own provider configuration; the jobs/admin integration tests use local auth.

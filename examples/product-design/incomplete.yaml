@@ -1,0 +1,7 @@
+product_version: 1
+title: A shared reading list
+summary: Help a small team collect and discuss useful reading.
+personas:
+  - Team members who want to keep useful articles in one place.
+integrations: []
+ai_capabilities: []

@@ -1,0 +1,15 @@
+from typing import Protocol
+
+from app.domain.records import Record
+
+
+class Repository(Protocol):
+    """Atomic upsert, exact lookup and idempotent delete within a namespace.
+
+    Missing keys return None. delete returns True only if a record existed.
+    Instances do not expose vendor connections or ORM objects.
+    """
+
+    def put(self, record: Record) -> None: ...
+    def get(self, key: str) -> Record | None: ...
+    def delete(self, key: str) -> bool: ...

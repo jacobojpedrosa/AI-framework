@@ -1,0 +1,40 @@
+import os
+import re
+
+from redis.asyncio import Redis
+from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
+
+from app.adapters.taskiq_jobs import RedisSchedules, TaskiqQueue
+from app.infrastructure.job_registry import REGISTRY, SCHEDULES
+
+
+def task_handler(name):
+    async def execute():
+        return await REGISTRY.execute(name)
+
+    return execute
+
+
+def create_components():
+    url = os.getenv("JOBS_REDIS_URL", "redis://jobs-redis:6379/0")
+    namespace = os.getenv("JOBS_NAMESPACE", "@@PROJECT@@")
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", namespace):
+        raise ValueError("Invalid jobs namespace")
+    prefix = "harness:jobs:" + namespace
+    backend = RedisAsyncResultBackend(url, result_ex_time=3600, prefix_str=prefix + ":results")
+    broker = RedisStreamBroker(
+        url,
+        queue_name=prefix + ":queue",
+        consumer_group_name=prefix + ":workers",
+        consumer_id="0",
+        socket_connect_timeout=5,
+    ).with_result_backend(backend)
+    tasks = {
+        name: broker.task(task_name="jobs." + name)(task_handler(name)) for name in REGISTRY.names()
+    }
+    client = Redis.from_url(url, socket_connect_timeout=5, socket_timeout=5)
+    return (
+        broker,
+        TaskiqQueue(REGISTRY, tasks, broker),
+        RedisSchedules(client, prefix + ":schedules", SCHEDULES),
+    )

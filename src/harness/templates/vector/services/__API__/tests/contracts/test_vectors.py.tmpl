@@ -1,0 +1,63 @@
+import os
+import uuid
+
+import pytest
+from sqlalchemy import text
+
+from app.adapters.memory_vectors import MemoryVectors
+from app.adapters.pgvector_store import PgVectorStore
+from app.adapters.sql_repository import open_engine
+
+
+@pytest.fixture(params=["memory", "pgvector"])
+def vectors(request):
+    if request.param == "memory":
+        yield MemoryVectors()
+        return
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("Set TEST_DATABASE_URL for pgvector contracts")
+    engine = open_engine(url)
+    namespace = "test-" + uuid.uuid4().hex
+    try:
+        yield PgVectorStore(engine, namespace)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM harness_vectors WHERE namespace=:namespace"),
+                {"namespace": namespace},
+            )
+        engine.dispose()
+
+
+def test_nearest_upsert_and_delete(vectors):
+    assert vectors.nearest((0, 0, 0)) == []
+    vectors.put("near", (1, 0, 0))
+    vectors.put("far", (3, 0, 0))
+    matches = vectors.nearest((0, 0, 0), limit=1)
+    assert matches[0].key == "near"
+    assert matches[0].distance == pytest.approx(1)
+    vectors.put("far", (0, 0, 0))
+    assert vectors.nearest((0, 0, 0))[0].key == "far"
+    assert vectors.delete("far") is True
+    assert vectors.delete("far") is False
+
+
+def test_ties_and_parameter_binding(vectors):
+    vectors.put("b", (1, 0, 0))
+    vectors.put("a';--", (-1, 0, 0))
+    assert [item.key for item in vectors.nearest((0, 0, 0))] == ["a';--", "b"]
+
+
+@pytest.mark.parametrize("vector", [(1, 2), (float("nan"), 0, 0), (float("inf"), 0, 0)])
+def test_invalid_vectors(vectors, vector):
+    with pytest.raises(ValueError):
+        vectors.put("invalid", vector)
+    with pytest.raises(ValueError):
+        vectors.nearest(vector)
+
+
+def test_invalid_limits(vectors):
+    for limit in (0, -1, 101, True):
+        with pytest.raises(ValueError):
+            vectors.nearest((0, 0, 0), limit=limit)

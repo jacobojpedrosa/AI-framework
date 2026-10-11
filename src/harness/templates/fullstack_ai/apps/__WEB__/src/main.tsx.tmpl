@@ -1,0 +1,106 @@
+import { StrictMode, useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { checkApi } from "./api.ts";
+import "./style.css";
+
+function App() {
+  const [attempt, setAttempt] = useState(0);
+  const [status, setStatus] = useState("Connecting to your API…");
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setState("loading");
+    setStatus("Connecting to your API…");
+    checkApi(controller.signal)
+      .then((service) => {
+        if (!controller.signal.aborted) {
+          setStatus(
+            `${service} is responding. Your web and API are connected.`,
+          );
+          setState("ready");
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setStatus(
+            "We couldn’t reach the API. Check that the backend is running.",
+          );
+          setState("error");
+        }
+      });
+    return () => controller.abort();
+  }, [attempt]);
+
+  return (
+    <div className="workspace">
+      <header>
+        <a className="wordmark" href="/" aria-label="Home">
+          @@PROJECT@@
+        </a>
+        <span className="environment">LOCAL DEVELOPMENT</span>
+      </header>
+      <main>
+        <p className="eyebrow">A PLACE TO START</p>
+        <h1>
+          Your next idea.
+          <br />
+          <span>Ready to build.</span>
+        </h1>
+        <p className="intro">
+          A working web app and API, with room for your product to grow.
+        </p>
+        <section className="status-card" aria-labelledby="connection-heading">
+          <div>
+            <p className={`indicator ${state}`}>
+              {state === "ready"
+                ? "CONNECTED"
+                : state === "error"
+                  ? "OFFLINE"
+                  : "CONNECTING"}
+            </p>
+            <h2 id="connection-heading">The connection is real.</h2>
+            <p role="status" aria-live="polite">
+              {status}
+            </p>
+          </div>
+          <button
+            disabled={state === "loading"}
+            onClick={() => setAttempt(attempt + 1)}
+          >
+            {state === "loading" ? "Checking…" : "Check connection"}
+          </button>
+        </section>
+        <div className="next-steps">
+          <a href="/api/docs" target="_blank" rel="noreferrer">
+            <span className="step">01 / EXPLORE</span>
+            <h2>
+              Meet your API <span aria-hidden="true">↗</span>
+            </h2>
+            <p>
+              Open the interactive documentation and try the health endpoint.
+            </p>
+          </a>
+          <section>
+            <span className="step">02 / CREATE</span>
+            <h2>Make it yours</h2>
+            <p>
+              Start with the project README, then replace this page with your
+              first product flow.
+            </p>
+          </section>
+        </div>
+      </main>
+      <footer>
+        <span>@@PROJECT@@</span>
+        <span>Web + API · development skeleton</span>
+      </footer>
+    </div>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);

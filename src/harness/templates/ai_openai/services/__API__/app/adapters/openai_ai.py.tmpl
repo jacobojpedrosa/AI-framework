@@ -1,0 +1,54 @@
+from openai import APIConnectionError, APIStatusError, APITimeoutError
+
+from app.adapters.ai_errors import status_error
+from app.domain.ai import AIError, TextRequest, TextResult
+
+
+class OpenAIProvider:
+    def __init__(self, client, model: str) -> None:
+        self._client = client
+        self._model = model
+
+    def generate(self, request: TextRequest) -> TextResult:
+        try:
+            response = self._client.responses.create(
+                model=self._model,
+                input=request.prompt,
+                max_output_tokens=request.max_output_tokens,
+                store=False,
+            )
+        except APITimeoutError:
+            raise AIError("timeout") from None
+        except APIStatusError as error:
+            raise status_error(error.status_code) from None
+        except APIConnectionError:
+            raise AIError("unavailable") from None
+        except Exception:
+            raise AIError("invalid_response") from None
+        try:
+            if response.status != "completed":
+                raise AIError("incomplete")
+            parts = []
+            for output in response.output:
+                if output.type != "message":
+                    continue
+                for content in output.content:
+                    if content.type == "refusal":
+                        raise AIError("blocked")
+                    if content.type == "output_text":
+                        parts.append(content.text)
+            return TextResult("".join(parts), "openai", self._model)
+        except AIError:
+            raise
+        except Exception:
+            raise AIError("invalid_response") from None
+
+    def check_remote(self) -> None:
+        try:
+            self._client.models.retrieve(self._model)
+        except APITimeoutError:
+            raise AIError("timeout") from None
+        except APIStatusError as error:
+            raise status_error(error.status_code) from None
+        except Exception:
+            raise AIError("unavailable") from None

@@ -1,0 +1,23 @@
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+
+@dataclass
+class StaticProbe:
+    available: bool = True
+
+    def check(self) -> bool:
+        return self.available
+
+
+class RaisingProbe:
+    def check(self) -> bool:
+        raise RuntimeError("private adapter credential")
+
+
+@dataclass
+class FrozenClock:
+    instant: datetime = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def now(self) -> datetime:
+        return self.instant

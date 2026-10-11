@@ -1,0 +1,31 @@
+from datetime import datetime
+
+import pytest
+
+from app.adapters.local import ProcessProbe, SystemClock
+from tests.contracts.assertions import assert_clock_contract, assert_probe_contract
+from tests.fakes import FrozenClock, StaticProbe
+
+
+@pytest.mark.parametrize("factory", [ProcessProbe, StaticProbe, lambda: StaticProbe(False)])
+def test_probe_contract(factory):
+    assert_probe_contract(factory())
+
+
+@pytest.mark.parametrize("factory", [SystemClock, FrozenClock])
+def test_clock_contract(factory):
+    assert_clock_contract(factory())
+
+
+def test_contract_rejects_truthy_non_bool():
+    class BrokenProbe:
+        def check(self):
+            return "yes"
+
+    with pytest.raises(AssertionError, match="bool"):
+        assert_probe_contract(BrokenProbe())
+
+
+def test_contract_rejects_naive_clock():
+    with pytest.raises(AssertionError, match="timezone-aware"):
+        assert_clock_contract(FrozenClock(datetime(2026, 1, 1)))

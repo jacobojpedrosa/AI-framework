@@ -1,0 +1,19 @@
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass(frozen=True)
+class Check:
+    name: str
+    available: bool
+
+
+@dataclass(frozen=True)
+class Readiness:
+    service: str
+    checked_at: datetime
+    checks: tuple[Check, ...]
+
+    @property
+    def ready(self) -> bool:
+        return all(check.available for check in self.checks)

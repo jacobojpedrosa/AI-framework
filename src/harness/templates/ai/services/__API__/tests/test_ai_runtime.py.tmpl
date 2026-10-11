@@ -1,0 +1,115 @@
+import pytest
+
+from app.application.generate_text import GenerateText
+from app.domain.ai import TextRequest
+from app.infrastructure.ai_configuration import read_settings
+from app.infrastructure.ai_runtime import provider_session
+from app.infrastructure.ai_settings import ENABLED_PROVIDERS
+from tests.ai_clients import SECRET, stub_provider
+
+
+@pytest.mark.parametrize("name", [p for p in ENABLED_PROVIDERS if p != "fake"])
+def test_runtime_uses_selected_sdk_without_domain_changes(name, monkeypatch):
+    captured = {}
+    with stub_provider(name) as (adapter, calls):
+
+        def client_factory(**kwargs):
+            captured.update(kwargs)
+            return adapter._client
+
+        if name == "openai":
+            monkeypatch.setattr("openai.OpenAI", client_factory)
+        else:
+            monkeypatch.setattr("google.genai.Client", client_factory)
+            if name == "vertex":
+                from google.oauth2.credentials import Credentials
+
+                monkeypatch.setattr(
+                    "google.auth.default", lambda **kwargs: (Credentials(SECRET), None)
+                )
+        settings = read_settings(
+            {
+                "AI_PROVIDER": name,
+                name.upper() + "_MODEL": "test-model",
+                name.upper() + "_API_KEY": SECRET,
+                "GOOGLE_CLOUD_PROJECT": "test-project",
+                "GOOGLE_CLOUD_LOCATION": "us-central1",
+            }
+        )
+        with provider_session(settings) as provider:
+            result = GenerateText(provider).execute(TextRequest("test"))
+        assert result.provider == name and len(calls) == 1
+        if name == "openai":
+            assert captured["max_retries"] == 0
+            assert captured["timeout"] == 20.0
+        else:
+            assert captured["vertexai"] == (name == "vertex")
+            assert captured["http_options"].retry_options.attempts == 1
+            assert captured["http_options"].timeout == 20000
+
+
+def test_live_generation_requires_explicit_flag(monkeypatch, capsys):
+    real = [p for p in ENABLED_PROVIDERS if p != "fake"]
+    if not real:
+        pytest.skip("No real provider enabled")
+    from app.infrastructure import ai_cli
+
+    settings = read_settings(
+        {
+            "AI_PROVIDER": real[0],
+            real[0].upper() + "_MODEL": "test-model",
+            real[0].upper() + "_API_KEY": SECRET,
+            "GOOGLE_CLOUD_PROJECT": "test-project",
+            "GOOGLE_CLOUD_LOCATION": "global",
+        }
+    )
+    monkeypatch.setattr(ai_cli, "read_settings", lambda: settings)
+    monkeypatch.setattr("sys.argv", ["ai_cli", "generate"])
+    monkeypatch.setattr(ai_cli, "provider_session", lambda *a: pytest.fail("Unexpected live call"))
+    assert ai_cli.main() == 1
+    assert SECRET not in capsys.readouterr().out
+
+
+def test_local_check_never_constructs_sdk(monkeypatch, capsys):
+    from app.infrastructure import ai_cli
+
+    name = ENABLED_PROVIDERS[0]
+    settings = read_settings(
+        {
+            "AI_PROVIDER": name,
+            name.upper() + "_MODEL": "test-model",
+            name.upper() + "_API_KEY": SECRET,
+            "GOOGLE_CLOUD_PROJECT": "test-project",
+            "GOOGLE_CLOUD_LOCATION": "global",
+        }
+    )
+    monkeypatch.setattr(ai_cli, "read_settings", lambda: settings)
+    monkeypatch.setattr("sys.argv", ["ai_cli", "check"])
+    monkeypatch.setattr(ai_cli, "provider_session", lambda *a: pytest.fail("Unexpected SDK call"))
+    assert ai_cli.main() == 0
+    assert SECRET not in capsys.readouterr().out
+
+
+def test_diagnostics_suppress_sdk_debug_logs(monkeypatch, capsys, caplog):
+    import logging
+    from contextlib import contextmanager
+
+    from app.domain.ai import AIError
+    from app.infrastructure import ai_cli
+    from app.infrastructure.ai_configuration import AISettings
+
+    @contextmanager
+    def failed_session(settings):
+        logging.getLogger("openai.transport").setLevel(logging.DEBUG)
+        logging.getLogger("openai.transport").debug(SECRET)
+        raise AIError("authentication")
+        yield  # pragma: no cover
+
+    before = logging.root.manager.disable
+    monkeypatch.setattr(ai_cli, "read_settings", lambda: AISettings("openai", "test"))
+    monkeypatch.setattr(ai_cli, "provider_session", failed_session)
+    monkeypatch.setattr("sys.argv", ["ai_cli", "check", "--remote"])
+    assert ai_cli.main() == 1
+    captured = capsys.readouterr()
+    assert SECRET not in captured.out + captured.err + caplog.text
+    assert logging.root.manager.disable == before

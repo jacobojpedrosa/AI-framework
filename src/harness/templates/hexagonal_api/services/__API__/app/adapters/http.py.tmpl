@@ -1,0 +1,51 @@
+from datetime import datetime
+from typing import Literal
+
+from fastapi import APIRouter, Response
+from pydantic import BaseModel
+
+from app.application.readiness import CheckReadiness
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok"]
+    service: str
+
+
+class CheckResponse(BaseModel):
+    name: str
+    available: bool
+
+
+class ReadinessResponse(BaseModel):
+    status: Literal["ready", "unavailable"]
+    service: str
+    checked_at: datetime
+    checks: list[CheckResponse]
+
+
+def health_router(service: str, readiness: CheckReadiness) -> APIRouter:
+    router = APIRouter(prefix="/api", tags=["health"])
+
+    @router.get("/health", response_model=HealthResponse)
+    def health() -> HealthResponse:
+        return HealthResponse(status="ok", service=service)
+
+    @router.get(
+        "/readiness",
+        response_model=ReadinessResponse,
+        responses={503: {"model": ReadinessResponse}},
+    )
+    def ready(response: Response) -> ReadinessResponse:
+        result = readiness.execute()
+        response.status_code = 200 if result.ready else 503
+        return ReadinessResponse(
+            status="ready" if result.ready else "unavailable",
+            service=result.service,
+            checked_at=result.checked_at,
+            checks=[
+                CheckResponse(name=check.name, available=check.available) for check in result.checks
+            ],
+        )
+
+    return router

@@ -1,0 +1,256 @@
+"""Deploy only to an existing explicitly configured service, by immutable digest."""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import time
+import urllib.error
+import urllib.request
+
+
+def required(env, key, pattern):
+    value = env.get(key, "")
+    if not re.fullmatch(pattern, value):
+        raise ValueError("Missing or invalid " + key)
+    return value
+
+
+def configuration(env):
+    provider = required(env, "DEPLOY_PROVIDER", r"gcp|azure")
+    stage = required(env, "DEPLOY_STAGE", r"dev|prod")
+    service = required(env, "DEPLOY_SERVICE", r"[a-z][a-z0-9-]{0,62}")
+    repo = required(env, "IMAGE_REPOSITORY", r"[a-z0-9./-]+/application")
+    config = {"provider": provider, "stage": stage, "service": service, "repository": repo}
+    if provider == "gcp":
+        project = required(env, "GCP_PROJECT", r"[a-z][a-z0-9-]{4,28}[a-z0-9]")
+        region = required(env, "GCP_REGION", r"[a-z]+-[a-z]+[0-9]+")
+        account = required(
+            env, "GCP_SERVICE_ACCOUNT", r"[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com"
+        )
+        if not re.fullmatch(
+            re.escape(region + "-docker.pkg.dev/" + project) + r"/[a-z0-9-]+/application", repo
+        ):
+            raise ValueError("Image repository must belong to the configured project/region")
+        config.update(project=project, region=region, account=account)
+    else:
+        subscription = required(
+            env, "AZURE_SUBSCRIPTION_ID", r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}"
+        )
+        group = required(env, "AZURE_RESOURCE_GROUP", r"[A-Za-z0-9_-]{1,90}")
+        registry = required(env, "AZURE_REGISTRY_NAME", r"[a-z0-9]{5,50}")
+        if repo != registry + ".azurecr.io/application":
+            raise ValueError("Image repository must belong to the configured Azure registry")
+        config.update(subscription=subscription, group=group, registry=registry)
+    return config
+
+
+def run(*args):
+    return subprocess.run(args, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def deploy_commands(config, image):
+    if not re.fullmatch(re.escape(config["repository"]) + r"@sha256:[a-f0-9]{64}", image):
+        raise ValueError("Deployment requires an immutable image from the configured registry")
+    if config["provider"] == "gcp":
+        common = ("--project", config["project"], "--region", config["region"])
+        return (
+            (
+                "gcloud",
+                "run",
+                "services",
+                "update",
+                config["service"],
+                *common,
+                "--image",
+                image,
+                "--quiet",
+            ),
+            ("gcloud", "run", "services", "describe", config["service"], *common, "--format=json"),
+        )
+    common = (
+        "--subscription",
+        config["subscription"],
+        "--resource-group",
+        config["group"],
+        "--name",
+        config["service"],
+    )
+    return (
+        ("az", "containerapp", "update", *common, "--image", image, "--output", "none"),
+        ("az", "containerapp", "show", *common, "--output", "json"),
+    )
+
+
+def verify_state(config, state, image):
+    if config["provider"] == "gcp":
+        if state["spec"]["template"]["spec"]["containers"][0]["image"] != image:
+            raise ValueError("Cloud Run did not retain the requested digest")
+        conditions = state.get("status", {}).get("conditions", [])
+        if not any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions):
+            raise ValueError("Cloud Run revision is not ready")
+        status = state["status"]
+        if not status.get("latestReadyRevisionName") or status[
+            "latestReadyRevisionName"
+        ] != status.get("latestCreatedRevisionName"):
+            raise ValueError("The new Cloud Run revision is not ready")
+        traffic = status.get("traffic", [])
+        if (
+            sum(
+                item.get("percent", 0)
+                for item in traffic
+                if item.get("revisionName") == status["latestReadyRevisionName"]
+            )
+            != 100
+        ):
+            raise ValueError("Cloud Run traffic has not moved to the new revision")
+        url = state["status"]["url"]
+        if not re.fullmatch(r"https://[a-z0-9-]+\.(?:[a-z0-9-]+\.)?run\.app", url):
+            raise ValueError("Unexpected Cloud Run health URL")
+        return url
+    properties = state["properties"]
+    if properties["template"]["containers"][0]["image"] != image:
+        raise ValueError("Container App did not retain the requested digest")
+    ingress = properties["configuration"]["ingress"]
+    if ingress.get("external") is not False or ingress.get("allowInsecure") is True:
+        raise ValueError("Azure service must retain internal HTTPS ingress")
+    if properties.get("provisioningState") != "Succeeded":
+        raise ValueError("Azure revision did not provision successfully")
+    if not properties.get("latestReadyRevisionName") or properties[
+        "latestReadyRevisionName"
+    ] != properties.get("latestRevisionName"):
+        raise ValueError("The new Azure revision is not ready")
+    fqdn = ingress["fqdn"]
+    if not re.fullmatch(r"[a-z0-9.-]+\.internal\.[a-z0-9.-]+\.azurecontainerapps\.io", fqdn):
+        raise ValueError("Unexpected internal Azure health URL")
+    return "https://" + fqdn
+
+
+def health(url, token=None):
+    headers = {"Authorization": "Bearer " + token} if token else {}
+    for _ in range(30):
+        try:
+            for path, expected in (("/api/health", "ok"), ("/api/readiness", "ready")):
+                request = urllib.request.Request(url + path, headers=headers)
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    if response.status != 200 or json.load(response).get("status") != expected:
+                        raise ValueError("Unhealthy response")
+            return
+        except (OSError, ValueError):
+            time.sleep(2)
+    raise RuntimeError("Deployment health checks failed; inspect the revision before rollback")
+
+
+def main(publish_only=False):
+    config = configuration(os.environ)
+    if publish_only and (config["provider"] != "azure" or config["stage"] != "dev"):
+        raise ValueError("Publish-only is restricted to Azure DEV")
+    repo = config["repository"]
+    if config["stage"] == "dev" and (config["provider"] == "gcp" or publish_only):
+        commit = required(os.environ, "GITHUB_SHA", r"[a-f0-9]{40}")
+        tag = repo + ":" + commit
+        if config["provider"] == "gcp":
+            run("gcloud", "auth", "configure-docker", repo.split("/")[0], "--quiet")
+        else:
+            run(
+                "az",
+                "acr",
+                "login",
+                "--name",
+                config["registry"],
+                "--subscription",
+                config["subscription"],
+            )
+        run("docker", "tag", "harness-release:ci", tag)
+        run("docker", "push", tag)
+        # Inspect the published tag in the registry, not the local image ID.
+        digest = run(
+            "docker", "buildx", "imagetools", "inspect", tag, "--format", "{{.Manifest.Digest}}"
+        )
+    else:
+        digest = os.environ["IMAGE_DIGEST"]
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
+        raise ValueError("Registry returned an invalid digest")
+    if publish_only:
+        with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+            stream.write("image_digest=" + digest + "\n")
+        return
+    image = repo + "@" + digest
+    update, describe = deploy_commands(config, image)
+    # Read before mutation: this workflow cannot bootstrap a new service.
+    current = json.loads(run(*describe))
+    if config["provider"] == "azure":
+        ingress = current["properties"]["configuration"]["ingress"]
+        if current["properties"]["configuration"].get("activeRevisionsMode") != "Single":
+            raise ValueError("Azure deployment requires Single revision mode")
+        if ingress.get("external") is not False or ingress.get("allowInsecure") is True:
+            raise ValueError("Existing Azure service must have internal HTTPS ingress")
+        labels = current.get("tags", {})
+    else:
+        labels = current.get("metadata", {}).get("labels", {})
+        annotations = current.get("metadata", {}).get("annotations", {})
+        if annotations.get("run.googleapis.com/invoker-iam-disabled") == "true":
+            raise ValueError("Cloud Run IAM invocation must remain enabled")
+        policy = json.loads(
+            run(
+                "gcloud",
+                "run",
+                "services",
+                "get-iam-policy",
+                config["service"],
+                "--project",
+                config["project"],
+                "--region",
+                config["region"],
+                "--format=json",
+            )
+        )
+        if any(
+            member in {"allUsers", "allAuthenticatedUsers"}
+            for binding in policy.get("bindings", [])
+            for member in binding.get("members", [])
+        ):
+            raise ValueError("Cloud Run must not grant public invocation")
+    if labels.get("environment") != config["stage"]:
+        raise ValueError("Existing resource environment label does not match the deployment stage")
+    run(*update)
+    if config["provider"] == "gcp":
+        run(
+            "gcloud",
+            "run",
+            "services",
+            "update-traffic",
+            config["service"],
+            "--project",
+            config["project"],
+            "--region",
+            config["region"],
+            "--to-latest",
+            "--quiet",
+        )
+    state = json.loads(run(*describe))
+    url = verify_state(config, state, image)
+    token = None
+    if config["provider"] == "gcp":
+        token = run(
+            "gcloud",
+            "auth",
+            "print-identity-token",
+            "--impersonate-service-account",
+            config["account"],
+            "--audiences",
+            url,
+        )
+    health(url, token)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as stream:
+            stream.write("Deployed and checked: " + image + "\n")
+    print("Deployment and health checks passed")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--publish", action="store_true")
+    main(publish_only=parser.parse_args().publish)

@@ -1,0 +1,74 @@
+import os
+import time
+import uuid
+
+import pytest
+
+from app.adapters.redis_cache import RedisCache
+from tests.cache_fake import MemoryCache
+
+
+@pytest.fixture(params=["memory", "redis"])
+def cache(request):
+    if request.param == "memory":
+        yield MemoryCache()
+        return
+    url = os.environ.get("TEST_REDIS_URL")
+    if not url:
+        pytest.skip("Set TEST_REDIS_URL for Redis contracts")
+    adapter = RedisCache(url, "test-" + uuid.uuid4().hex)
+    try:
+        yield adapter
+    finally:
+        # Test entries always expire; never FLUSHDB or delete application keys.
+        adapter.close()
+
+
+def test_roundtrip_overwrite_and_delete(cache):
+    assert cache.get("missing") is None
+    assert cache.delete("missing") is False
+    cache.set("binary", b"\x00\xff", 5)
+    assert cache.get("binary") == b"\x00\xff"
+    cache.set("binary", b"", 5)
+    assert cache.get("binary") == b""
+    assert cache.delete("binary") is True
+    assert cache.delete("binary") is False
+
+
+def test_ttl_expires(cache):
+    cache.set("short", b"data", 1)
+    assert cache.get("short") == b"data"
+    deadline = time.monotonic() + 4
+    while cache.get("short") is not None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert cache.get("short") is None
+    assert cache.delete("short") is False
+
+
+def test_overwrite_resets_ttl(cache):
+    cache.set("reset", b"old", 1)
+    cache.set("reset", b"new", 5)
+    time.sleep(1.05)
+    assert cache.get("reset") == b"new"
+
+
+@pytest.mark.parametrize("ttl", [0, -1, True, 86401])
+def test_invalid_ttl(cache, ttl):
+    with pytest.raises(ValueError):
+        cache.set("key", b"value", ttl)
+
+
+def test_namespace_isolation():
+    url = os.environ.get("TEST_REDIS_URL")
+    if not url:
+        pytest.skip("Set TEST_REDIS_URL for Redis isolation")
+    first = RedisCache(url, "test:" + uuid.uuid4().hex)
+    other = RedisCache(url, "test-" + uuid.uuid4().hex)
+    try:
+        first.set("same", b"private", 5)
+        assert other.get("same") is None
+        assert not other.delete("same")
+    finally:
+        first.delete("same")
+        first.close()
+        other.close()

@@ -1,0 +1,54 @@
+import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import {
+  BasicTracerProvider,
+  SimpleSpanProcessor,
+  type SpanExporter,
+} from "@opentelemetry/sdk-trace-base";
+
+// No URL, body, credentials or user identifiers are exported by this adapter.
+const exporter: SpanExporter = {
+  export(spans, done) {
+    for (const span of spans) {
+      const context = span.spanContext();
+      console.info(
+        JSON.stringify({
+          event: "web_span",
+          service: "@@WEB@@",
+          name: span.name,
+          trace_id: context.traceId,
+          span_id: context.spanId,
+          status: span.status.code,
+        }),
+      );
+    }
+    done({ code: 0 });
+  },
+  async shutdown() {},
+};
+const provider = new BasicTracerProvider({
+  spanProcessors: [new SimpleSpanProcessor(exporter)],
+});
+const tracer = provider.getTracer("harness.web", "1.0.0");
+
+export async function tracedHealthFetch(
+  signal?: AbortSignal,
+): Promise<Response> {
+  const span = tracer.startSpan("GET /api/health", { kind: SpanKind.CLIENT });
+  const context = span.spanContext();
+  try {
+    const response = await fetch("/api/health", {
+      signal,
+      headers: {
+        traceparent: `00-${context.traceId}-${context.spanId}-01`,
+        "x-request-id": crypto.randomUUID(),
+      },
+    });
+    if (!response.ok) span.setStatus({ code: SpanStatusCode.ERROR });
+    return response;
+  } catch (error) {
+    span.setStatus({ code: SpanStatusCode.ERROR });
+    throw error;
+  } finally {
+    span.end();
+  }
+}

@@ -1,0 +1,81 @@
+resource "google_service_account" "runtime" {
+  project      = var.project_id
+  account_id   = "@@CLOUD_ACCOUNT@@"
+  display_name = "DEV runtime for @@PROJECT@@"
+  description  = "Dedicated runtime identity; no project roles are granted by this module."
+}
+
+resource "google_cloud_run_v2_service" "app" {
+  # CI/CD owns image revisions after initial provisioning.
+  lifecycle { ignore_changes = [template[0].containers[0].image] }
+  project              = var.project_id
+  name                 = "@@CLOUD_RESOURCE@@"
+  location             = var.region
+  deletion_protection  = true
+  ingress              = "INGRESS_TRAFFIC_ALL"
+  invoker_iam_disabled = false
+  labels               = { environment = "dev", managed_by = "terraform" }
+  template {
+    service_account                  = google_service_account.runtime.email
+    timeout                          = "30s"
+    max_instance_request_concurrency = 40
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 2
+    }
+    containers {
+      image = var.container_image
+      ports { container_port = 8080 }
+      resources {
+        limits            = { cpu = "1", memory = "512Mi" }
+        cpu_idle          = true
+        startup_cpu_boost = false
+      }
+      env {
+        name  = "TELEMETRY_EXPORTER"
+        value = "console"
+      }
+      env {
+        name  = "TELEMETRY_SAMPLE_RATIO"
+        value = "1"
+      }
+      startup_probe {
+        http_get {
+          path = "/api/readiness"
+          port = 8080
+        }
+        period_seconds    = 3
+        timeout_seconds   = 2
+        failure_threshold = 20
+      }
+      liveness_probe {
+        http_get {
+          path = "/api/health"
+          port = 8080
+        }
+        period_seconds    = 10
+        timeout_seconds   = 2
+        failure_threshold = 3
+      }
+    }
+  }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "invoker" {
+  for_each = var.invokers
+  project  = var.project_id
+  location = google_cloud_run_v2_service.app.location
+  name     = google_cloud_run_v2_service.app.name
+  role     = "roles/run.invoker"
+  member   = each.value
+}
+
+output "service_url" {
+  value = google_cloud_run_v2_service.app.uri
+}
+output "service_name" {
+  value = google_cloud_run_v2_service.app.name
+}
+output "runtime_identity" {
+  value = google_service_account.runtime.email
+}

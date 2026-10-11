@@ -1,0 +1,34 @@
+import hashlib
+
+from app.domain.files import FileMetadata, validate_key
+
+
+class S3Storage:
+    """Uses an injected boto-compatible client; credentials are never read by the domain."""
+    def __init__(self, client, bucket: str, max_bytes: int = 25_000_000):
+        if not bucket or "/" in bucket:
+            raise ValueError("Invalid bucket")
+        self.client, self.bucket, self.max_bytes = client, bucket, max_bytes
+
+    def _key(self, tenant, key):
+        if not tenant or "/" in tenant or "\\" in tenant:
+            raise ValueError("Invalid tenant")
+        return tenant + "/" + validate_key(key)
+
+    def put(self, tenant, key, data, content_type):
+        if not isinstance(data, bytes) or len(data) > self.max_bytes:
+            raise ValueError("File exceeds configured size")
+        object_key = self._key(tenant, key)
+        self.client.put_object(Bucket=self.bucket, Key=object_key, Body=data, ContentType=content_type)
+        return FileMetadata(key, content_type, len(data), hashlib.sha256(data).hexdigest())
+
+    def get(self, tenant, key):
+        object_key = self._key(tenant, key)
+        result = self.client.get_object(Bucket=self.bucket, Key=object_key)
+        data = result["Body"].read()
+        return FileMetadata(key, result.get("ContentType", "application/octet-stream"), len(data), result.get("ETag")), data
+
+    def delete(self, tenant, key):
+        object_key = self._key(tenant, key)
+        self.client.delete_object(Bucket=self.bucket, Key=object_key)
+        return True

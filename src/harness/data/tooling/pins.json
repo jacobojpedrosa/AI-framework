@@ -1,0 +1,10 @@
+{
+  "openspec": "1.13.2",
+  "agent_os": {
+    "version": "3.0",
+    "commit": "475b0cac4c7c5cf2336ad5a663b691a6d3415e05",
+    "sha256": "57363bf71e6b2b457583f8ad6758cabe8cd0643a6223dbcdc4b0c4a6bf6b572f"
+  },
+  "tools": ["claude", "codex"],
+  "agent_os_commands": ["discover-standards", "inject-standards", "index-standards"]
+}

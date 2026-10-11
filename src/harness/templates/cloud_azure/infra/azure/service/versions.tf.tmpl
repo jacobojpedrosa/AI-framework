@@ -1,0 +1,43 @@
+terraform {
+  required_version = "= 1.15.8"
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "= 5.9.0"
+    }
+  }
+}
+provider "azurerm" {
+  features {}
+  subscription_id                 = var.subscription_id
+  tenant_id                       = var.tenant_id
+  resource_provider_registrations = "none"
+}
+variable "subscription_id" {
+  type        = string
+  description = "Explicitly authorized DEV subscription; never inferred from Azure CLI."
+  validation {
+    condition     = can(regex("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$", var.subscription_id))
+    error_message = "subscription_id must be a lowercase UUID."
+  }
+}
+variable "tenant_id" {
+  type = string
+  validation {
+    condition     = can(regex("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$", var.tenant_id))
+    error_message = "tenant_id must be a lowercase UUID."
+  }
+}
+variable "location" {
+  type    = string
+  default = "westeurope"
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]{1,39}$", var.location))
+    error_message = "Use a canonical Azure region name."
+  }
+}
+locals {
+  resource_name = "@@AZURE_RESOURCE@@"
+  registry_name = format("@@AZURE_REGISTRY@@%s", substr(replace(var.subscription_id, "-", ""), 0, 8))
+  tags          = { environment = "dev", managed_by = "terraform" }
+}

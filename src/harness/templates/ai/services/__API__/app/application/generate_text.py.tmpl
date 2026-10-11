@@ -1,0 +1,10 @@
+from app.domain.ai import TextRequest, TextResult
+from app.ports.ai import TextProvider
+
+
+class GenerateText:
+    def __init__(self, provider: TextProvider) -> None:
+        self._provider = provider
+
+    def execute(self, request: TextRequest) -> TextResult:
+        return self._provider.generate(request)

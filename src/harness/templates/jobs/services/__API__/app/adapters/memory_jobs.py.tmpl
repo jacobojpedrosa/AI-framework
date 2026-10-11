@@ -1,0 +1,57 @@
+import asyncio
+import time
+from collections import deque
+from dataclasses import replace
+from uuid import uuid4
+
+from app.domain.jobs import Schedule
+
+
+class MemoryQueue:
+    def __init__(self, registry, capacity=1000):
+        self.registry = registry
+        self.pending = asyncio.Queue(maxsize=capacity)
+        self.results = deque(maxlen=100)
+
+    async def enqueue(self, name: str) -> str:
+        self.registry.require(name)
+        identifier = uuid4().hex
+        self.pending.put_nowait((identifier, name))
+        return identifier
+
+    async def consume_one(self):
+        identifier, name = self.pending.get_nowait()
+        try:
+            result = await self.registry.execute(name)
+            self.results.append((identifier, result))
+            return identifier, result
+        finally:
+            self.pending.task_done()
+
+
+class MemorySchedules:
+    def __init__(self, definitions: tuple[Schedule, ...]):
+        self.entries = {item.name: item for item in definitions}
+        self.due = {}
+
+    async def list(self) -> tuple[Schedule, ...]:
+        return tuple(self.entries[name] for name in sorted(self.entries))
+
+    async def update(self, name, enabled, interval_seconds):
+        if name not in self.entries:
+            raise ValueError("Unknown registered schedule")
+        updated = replace(self.entries[name], enabled=enabled, interval_seconds=interval_seconds)
+        self.entries[name] = updated
+        self.due.pop(name, None)
+        return updated
+
+    async def tick(self, queue, now=None):
+        now = time.monotonic() if now is None else now
+        for item in await self.list():
+            if not item.enabled:
+                continue
+            deadline = self.due.setdefault(item.name, now + item.interval_seconds)
+            if now >= deadline:
+                await queue.enqueue(item.job)
+                # Coalesce missed intervals rather than flooding the queue after a pause.
+                self.due[item.name] = now + item.interval_seconds

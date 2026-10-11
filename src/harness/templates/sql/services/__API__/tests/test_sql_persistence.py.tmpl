@@ -1,0 +1,35 @@
+from sqlalchemy import text
+
+from app.adapters.sql_repository import SqlRepository, open_engine
+from app.domain.records import Record
+from app.infrastructure.migrate import upgrade
+
+
+def test_migration_idempotency_and_data_survives_reopening(tmp_path):
+    url = "sqlite:///" + str(tmp_path / "durable.db")
+    engine = open_engine(url)
+    upgrade(engine)
+    SqlRepository(engine).put(Record("kept", "value"))
+    upgrade(engine)
+    engine.dispose()
+    reopened = open_engine(url)
+    try:
+        assert SqlRepository(reopened).get("kept") == Record("kept", "value")
+        with reopened.connect() as connection:
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    finally:
+        reopened.dispose()
+
+
+def test_namespace_isolation(tmp_path):
+    engine = open_engine("sqlite:///" + str(tmp_path / "isolated.db"))
+    try:
+        upgrade(engine)
+        first = SqlRepository(engine, "first")
+        other = SqlRepository(engine, "other")
+        first.put(Record("key", "private"))
+        assert other.get("key") is None
+        assert other.delete("key") is False
+        assert first.get("key") == Record("key", "private")
+    finally:
+        engine.dispose()

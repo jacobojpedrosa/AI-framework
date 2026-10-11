@@ -1,0 +1,11 @@
+# Copy to backend.tf BEFORE init for shared state.
+# Create and secure the state account/container separately. Use distinct keys per root.
+terraform {
+  backend "azurerm" {
+    use_azuread_auth = true
+    resource_group_name = "REPLACE_STATE_RESOURCE_GROUP"
+    storage_account_name = "REPLACE_STATE_ACCOUNT"
+    container_name = "tfstate"
+    key = "dev/bootstrap.tfstate"
+  }
+}

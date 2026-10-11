@@ -1,0 +1,7 @@
+# Optional team backend. Create and secure the bucket outside these roots first.
+# Rename to backend.tf BEFORE terraform init. Never commit credentials.
+terraform {
+  backend "gcs" {}
+}
+# terraform init -backend-config="bucket=YOUR_STATE_BUCKET" -backend-config="prefix=UNIQUE_ROOT_PREFIX"
+# Use different prefixes for bootstrap and service. Enable bucket versioning and restricted IAM.

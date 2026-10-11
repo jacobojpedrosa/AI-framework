@@ -1,0 +1,14 @@
+from datetime import datetime, timedelta
+
+from app.ports.health import Clock, Probe
+
+
+def assert_probe_contract(probe: Probe) -> None:
+    assert type(probe.check()) is bool, "Probe.check() must return a bool"
+
+
+def assert_clock_contract(clock: Clock) -> None:
+    instant = clock.now()
+    assert isinstance(instant, datetime), "Clock.now() must return a datetime"
+    assert instant.tzinfo is not None, "Clock must be timezone-aware"
+    assert instant.utcoffset() == timedelta(0), "Clock must use UTC"

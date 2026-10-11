@@ -1,0 +1,42 @@
+resource "azurerm_resource_group" "dev" {
+  name     = local.resource_name
+  location = var.location
+  tags     = local.tags
+  lifecycle { prevent_destroy = true }
+}
+resource "azurerm_container_registry" "images" {
+  name                = local.registry_name
+  resource_group_name = azurerm_resource_group.dev.name
+  location            = azurerm_resource_group.dev.location
+  sku                 = "Basic"
+  admin_enabled       = false
+  tags                = local.tags
+  lifecycle { prevent_destroy = true }
+}
+resource "azurerm_user_assigned_identity" "pull" {
+  name                = local.resource_name
+  resource_group_name = azurerm_resource_group.dev.name
+  location            = azurerm_resource_group.dev.location
+  tags                = local.tags
+}
+resource "azurerm_role_assignment" "pull" {
+  scope                            = azurerm_container_registry.images.id
+  role_definition_name             = "AcrPull"
+  principal_id                     = azurerm_user_assigned_identity.pull.principal_id
+  skip_service_principal_aad_check = true
+}
+resource "azurerm_container_app_environment" "dev" {
+  name                = local.resource_name
+  resource_group_name = azurerm_resource_group.dev.name
+  location            = azurerm_resource_group.dev.location
+  # No retained logging backend: console logs remain available through streaming.
+  workload_profile {
+    name                  = "Consumption"
+    workload_profile_type = "Consumption"
+  }
+  tags = local.tags
+  lifecycle { prevent_destroy = true }
+}
+output "registry_name" { value = azurerm_container_registry.images.name }
+output "image_repository" { value = format("%s/application", azurerm_container_registry.images.login_server) }
+output "resource_group_name" { value = azurerm_resource_group.dev.name }

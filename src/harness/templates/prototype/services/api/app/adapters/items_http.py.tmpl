@@ -1,0 +1,51 @@
+from dataclasses import asdict
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Response
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.application.items import Items
+from app.domain.items import CollectionFull
+
+Status = Literal[
+    "@@STATUS_VALUES@@",
+]
+
+
+class ItemInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    title: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=2000)
+    status: Status
+
+
+class ItemOutput(ItemInput):
+    id: str
+
+
+def items_router(items: Items) -> APIRouter:
+    router = APIRouter(prefix="/api/items", tags=["items"])
+
+    @router.get("", response_model=list[ItemOutput], operation_id="listItems")
+    def list_items():
+        return [asdict(item) for item in items.list()]
+
+    @router.get("/{item_id}", response_model=ItemOutput, operation_id="getItem")
+    def get_item(item_id: str):
+        item = items.get(item_id)
+        if item is None:
+            raise HTTPException(404, "Item not found")
+        return asdict(item)
+
+    @router.post("", response_model=ItemOutput, status_code=201, operation_id="createItem")
+    def create_item(payload: ItemInput, response: Response):
+        try:
+            item = items.create(payload.title, payload.description, payload.status)
+        except ValueError:
+            raise HTTPException(422, "Invalid item") from None
+        except CollectionFull:
+            raise HTTPException(409, "Prototype collection limit reached") from None
+        response.headers["Location"] = f"/api/items/{item.id}"
+        return asdict(item)
+
+    return router

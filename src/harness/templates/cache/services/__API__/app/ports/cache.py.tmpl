@@ -1,0 +1,12 @@
+from typing import Protocol
+
+
+class Cache(Protocol):
+    """Opaque bytes, mandatory TTL in seconds, namespaced keys.
+
+    Missing/expired entries return None. Overwriting resets the TTL.
+    """
+
+    def set(self, key: str, value: bytes, ttl_seconds: int) -> None: ...
+    def get(self, key: str) -> bytes | None: ...
+    def delete(self, key: str) -> bool: ...

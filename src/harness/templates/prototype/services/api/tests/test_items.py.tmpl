@@ -1,0 +1,70 @@
+import json
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.adapters.memory_items import MemoryItems
+from app.application.items import Items
+from app.domain.items import CollectionFull
+from app.infrastructure.bootstrap import create_app
+
+DATA = json.loads((Path(__file__).parents[1] / "app/infrastructure/product.json").read_text())
+
+
+@pytest.fixture
+def client():
+    with TestClient(create_app()) as client:
+        yield client
+
+
+def test_create_list_detail_and_openapi(client):
+    payload = {"title": "A new item", "description": "Context", "status": DATA["statuses"][0]}
+    response = client.post("/api/items", json=payload)
+    assert response.status_code == 201
+    item = response.json()
+    assert item == {**payload, "id": item["id"]}
+    assert client.get(response.headers["location"]).json() == item
+    assert item in client.get("/api/items").json()
+    schema = client.get("/api/openapi.json").json()
+    assert schema["paths"]["/api/items"]["post"]["operationId"] == "createItem"
+    status = schema["components"]["schemas"]["ItemInput"]["properties"]["status"]
+    assert status.get("enum", [status.get("const")]) == DATA["statuses"]
+    assert schema["components"]["schemas"]["ItemInput"]["additionalProperties"] is False
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"title": " "},
+        {"title": "x" * 81},
+        {"description": "x" * 2001},
+        {"status": "not-a-declared-status"},
+        {"title": 12},
+        {"unexpected": "field"},
+    ],
+)
+def test_validation_does_not_insert(client, override):
+    before = client.get("/api/items").json()
+    payload = {"title": "Valid", "status": DATA["statuses"][0], **override}
+    assert client.post("/api/items", json=payload).status_code == 422
+    assert client.get("/api/items").json() == before
+
+
+def test_missing_record_and_process_isolation(client):
+    assert client.get("/api/items/missing").status_code == 404
+    item = client.post(
+        "/api/items", json={"title": "Only here", "status": DATA["statuses"][0]}
+    ).json()
+    with TestClient(create_app()) as other:
+        assert other.get(f"/api/items/{item['id']}").status_code == 404
+
+
+def test_repository_limit_and_use_case_validation():
+    items = Items(MemoryItems(limit=1), ("new",))
+    with pytest.raises(ValueError):
+        items.create(" ", "", "new")
+    item = items.create("First", "", "new")
+    with pytest.raises(CollectionFull):
+        items.create("Second", "", "new")
+    assert items.get(item.id) == item

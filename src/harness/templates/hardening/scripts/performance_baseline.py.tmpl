@@ -1,0 +1,76 @@
+"""Sequential loopback health baseline; does not model concurrent production load."""
+
+import argparse
+import json
+import math
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def measure(origin, samples=20, budget_ms=1000):
+    url = urllib.parse.urlsplit(origin)
+    if (
+        url.scheme != "http"
+        or url.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or url.username
+        or url.password
+        or url.path not in {"", "/"}
+        or url.query
+        or url.fragment
+        or not 1 <= samples <= 100
+        or not math.isfinite(budget_ms)
+        or budget_ms <= 0
+    ):
+        raise ValueError("Invalid local baseline parameters")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    latencies, errors = [], 0
+    for _ in range(samples):
+        start = time.perf_counter()
+        try:
+            with opener.open(origin.rstrip("/") + "/api/health", timeout=3) as response:
+                raw = response.read(16385)
+                valid = response.status == 200 and len(raw) <= 16384
+                body = json.loads(raw) if valid else {}
+                if not isinstance(body, dict) or body.get("status") != "ok":
+                    errors += 1
+        except (OSError, ValueError, urllib.error.URLError):
+            errors += 1
+        latencies.append((time.perf_counter() - start) * 1000)
+    values = sorted(latencies)
+    p95 = values[math.ceil(len(values) * 0.95) - 1]
+    return {
+        "schema_version": 1,
+        "scope": "local-sequential-health",
+        "samples": samples,
+        "errors": errors,
+        "p50_ms": round(values[math.ceil(len(values) * 0.5) - 1], 3),
+        "p95_ms": round(p95, 3),
+        "budget_ms": budget_ms,
+        "status": "pass" if errors == 0 and p95 <= budget_ms else "fail",
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("origin")
+    parser.add_argument("--samples", type=int, default=20)
+    parser.add_argument("--budget-ms", type=float, default=1000)
+    args = parser.parse_args()
+    try:
+        result = measure(args.origin, args.samples, args.budget_ms)
+    except (ValueError, TypeError):
+        print(json.dumps({"status": "error", "code": "invalid_parameters"}))
+        return 1
+    print(json.dumps(result))
+    return 0 if result["status"] == "pass" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

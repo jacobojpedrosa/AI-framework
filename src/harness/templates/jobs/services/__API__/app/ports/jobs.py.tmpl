@@ -1,0 +1,12 @@
+from typing import Protocol
+
+from app.domain.jobs import Schedule
+
+
+class JobQueuePort(Protocol):
+    async def enqueue(self, name: str) -> str: ...
+
+
+class SchedulerPort(Protocol):
+    async def list(self) -> tuple[Schedule, ...]: ...
+    async def update(self, name: str, enabled: bool, interval_seconds: int) -> Schedule: ...

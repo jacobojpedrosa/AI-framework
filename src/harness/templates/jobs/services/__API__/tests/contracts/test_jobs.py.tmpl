@@ -1,0 +1,68 @@
+import asyncio
+
+import pytest
+
+from app.adapters.memory_jobs import MemoryQueue, MemorySchedules
+from app.application.jobs import JobRegistry, RunJob, heartbeat
+from app.domain.jobs import Schedule
+
+
+def test_enqueue_consumption_and_unknown_job_rejection():
+    async def check():
+        registry = JobRegistry({"heartbeat": heartbeat})
+        queue = MemoryQueue(registry)
+        identifier = await RunJob(registry, queue).execute("heartbeat")
+        assert queue.results == queue.results.__class__(maxlen=100)
+        consumed, result = await queue.consume_one()
+        assert consumed == identifier
+        assert result == {"status": "ok", "job": "heartbeat"}
+        with pytest.raises(ValueError):
+            await queue.enqueue("os.system")
+        assert queue.pending.empty()
+
+    asyncio.run(check())
+
+
+def test_memory_schedule_reconfiguration_and_missed_intervals():
+    async def check():
+        registry = JobRegistry({"heartbeat": heartbeat})
+        queue = MemoryQueue(registry)
+        schedules = MemorySchedules((Schedule("hourly", "heartbeat"),))
+        await schedules.tick(queue, now=0)
+        assert queue.pending.empty()
+        await schedules.update("hourly", True, 10)
+        await schedules.tick(queue, now=0)
+        await schedules.tick(queue, now=9)
+        assert queue.pending.empty()
+        await schedules.tick(queue, now=10)
+        assert queue.pending.qsize() == 1
+        await schedules.tick(queue, now=10000)
+        assert queue.pending.qsize() == 2
+        await schedules.update("hourly", False, 10)
+        await schedules.tick(queue, now=20000)
+        assert queue.pending.qsize() == 2
+        with pytest.raises(ValueError):
+            await schedules.update("arbitrary-code", True, 10)
+        for invalid in (0, -1, 86401, True, "10", 1.5):
+            with pytest.raises(ValueError):
+                await schedules.update("hourly", True, invalid)
+        assert (await schedules.list())[0].enabled is False
+
+    asyncio.run(check())
+
+
+def test_bounded_queue_and_failed_handler_do_not_report_success():
+    async def fail():
+        raise RuntimeError("failure")
+
+    async def check():
+        queue = MemoryQueue(JobRegistry({"fail": fail}), capacity=1)
+        await queue.enqueue("fail")
+        with pytest.raises(asyncio.QueueFull):
+            await queue.enqueue("fail")
+        with pytest.raises(RuntimeError):
+            await queue.consume_one()
+        assert not queue.results
+        await asyncio.wait_for(queue.pending.join(), timeout=1)
+
+    asyncio.run(check())

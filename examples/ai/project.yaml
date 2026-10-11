@@ -1,0 +1,14 @@
+schema_version: 1
+project:
+  name: ai-provider-demo
+architecture:
+  golden_path: fullstack-ai
+  hexagonal_services: true
+apps:
+  web:
+    framework: react
+services:
+  api:
+    framework: fastapi
+ai:
+  providers: [fake, openai, gemini, vertex]

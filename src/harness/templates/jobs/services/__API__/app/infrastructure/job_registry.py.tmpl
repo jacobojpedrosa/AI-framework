@@ -1,0 +1,6 @@
+from app.application.jobs import JobRegistry, heartbeat
+from app.domain.jobs import Schedule
+from app.infrastructure.jobs_selection import SCHEDULER_ENABLED
+
+REGISTRY = JobRegistry({"heartbeat": heartbeat})
+SCHEDULES = (Schedule("heartbeat-default", "heartbeat"),) if SCHEDULER_ENABLED else ()

@@ -1,0 +1,9 @@
+from typing import Protocol
+
+from app.domain.items import Item
+
+
+class ItemRepository(Protocol):
+    def list(self) -> tuple[Item, ...]: ...
+    def get(self, item_id: str) -> Item | None: ...
+    def add(self, title: str, description: str, status: str) -> Item: ...

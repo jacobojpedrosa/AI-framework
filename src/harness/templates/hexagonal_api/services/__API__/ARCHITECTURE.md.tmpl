@@ -1,0 +1,32 @@
+# Hexagonal service
+
+The operational example is readiness, with no invented business domain.
+
+- `app/domain`: immutable readiness result; standard library only.
+- `app/ports`: structural Protocols for probes and UTC clocks.
+- `app/application`: CheckReadiness orchestrates ports; no FastAPI or adapters.
+- `app/adapters`: inbound HTTP and outbound local process/clock implementations.
+- `app/infrastructure/bootstrap.py`: composition root; create_app accepts an
+  injected use case for deterministic tests. No global service locator.
+
+`/api/health` is process liveness. `/api/readiness` returns 200 when all configured
+probes pass and 503 otherwise. The default process probe demonstrates wiring only;
+it does not verify unconfigured databases, AI providers or external services.
+Probe exceptions are converted to unavailable checks without publishing errors.
+External adapters must implement their own bounded I/O timeouts; this synchronous
+example does not cancel probes or implement retries.
+
+Run `make test-contracts` from the project root or `python -m pytest tests/contracts`
+from this service. The same assertions run against real local adapters and fakes.
+The suite also proves that a truthy non-bool probe and a naive clock are rejected.
+All contracts run as part of `make test`.
+
+To add an adapter, implement the corresponding Protocol, add its factory to
+`tests/contracts/test_health_ports.py`, and wire it in bootstrap. Keep credentials
+and framework types outside domain, ports and application. Fakes live in tests,
+not runtime source. AST boundary tests guard static imports; they are not a
+sandbox against dynamic Python imports.
+
+Set `architecture.hexagonal_services: false` before generating a new project to
+choose the simple API template. Scaffold never rewrites an existing project.
+

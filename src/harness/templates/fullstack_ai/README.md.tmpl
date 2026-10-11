@@ -1,0 +1,99 @@
+# @@PROJECT@@
+
+Standalone React + FastAPI development skeleton. The application has no harness
+runtime dependency. Docker Compose, Python and npm are the normal toolchain.
+
+## Start and stop
+
+Requires Docker with Compose supporting `up --wait` and GNU Make.
+
+```sh
+make up
+make down
+```
+
+Open [the web app](http://localhost:5173) and
+[interactive API documentation](http://localhost:5173/api/docs).
+The web page calls the API through Vite's `/api` proxy on the same origin.
+The API is also reachable directly at [its health endpoint](http://localhost:8000/api/health).
+Both published ports bind to 127.0.0.1, not all network interfaces.
+
+`.env` is optional. Copy `.env.example` to `.env` to override `WEB_PORT`, `API_PORT`
+or `COMPOSE_PROJECT_NAME`. Choose distinct ports and Compose names for concurrent
+copies. No credentials are required. Never commit secrets to `project.yaml` or
+the frontend; Vite's public environment variables are visible in browser code.
+
+`make up` builds images, starts both services and waits for healthy containers.
+It fails if startup checks do not pass. The first run downloads pinned dependencies
+and official image digests. Subsequent builds use Docker's cache.
+Code is copied into images: run `make up` again after changing source code.
+`make down` removes this Compose project's containers/network, not images or data
+from unrelated projects. No persistent volumes exist in this skeleton.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `make up` / `make down` | Start and stop the complete stack |
+| `make frontend-up` / `make frontend-down` | Start web (and required API) / stop web |
+| `make backend-up` / `make backend-down` | Start / stop API |
+| `make logs` / `make status` | Follow logs / inspect containers |
+| `make test` | API pytest tests and web Node tests, in disposable containers |
+| `make lint` | Python Ruff; web TypeScript checking and Prettier |
+| `make format` | Format host source through explicit bind mounts |
+| `make build` | Build images and compile the frontend bundle |
+
+There are no worker/scheduler commands because those processes are not enabled.
+Tests and lint can run before `make up`: each target builds its required image.
+Use `COMPOSE='docker compose -p other-project'` to override the Compose command.
+
+## Without Docker
+
+Use Python 3.12 and Node 24. Two terminals:
+
+```sh
+cd services/@@API@@
+python3 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements-dev.txt
+.venv/bin/python -m uvicorn app.main:app --reload --port 8000
+```
+
+```sh
+cd apps/@@WEB@@
+npm ci
+npm run dev
+```
+
+API tests: `.venv/bin/python -m pytest` in the API directory.
+Frontend tests/build: `npm test` and `npm run build` in the web directory.
+The Vite proxy defaults to `http://127.0.0.1:8000`; use `API_INTERNAL_URL` to
+override its server-side target. This variable is not a browser API credential.
+
+## Layout and scope
+
+```text
+apps/@@WEB@@/       React, TypeScript, Vite, web tests and Dockerfile
+services/@@API@@/  FastAPI health endpoint, OpenAPI, tests and Dockerfile
+compose.yaml       Development process wiring and health checks
+Makefile           Stable local commands
+project.yaml       Declarative intent, not a runtime dependency
+.harness/          Template provenance and file hashes; not loaded by the app
+```
+
+The API includes a real health endpoint. There is no business logic,
+database, authentication, admin, AI provider, worker, scheduler or cloud setup.
+When `architecture.hexagonal_services` is true (the default), see
+`services/@@API@@/ARCHITECTURE.md` for the readiness use case, injectable ports,
+adapters and contract tests. Run `make test-contracts` for that variant.
+When false, the service remains a simple FastAPI health endpoint.
+
+The default web container runs Vite for local development; it is not a production
+web server. `npm run build` creates static assets in `apps/@@WEB@@/dist` when run
+locally. The API Dockerfile has a `runtime` target without test tools; Compose
+uses `development` so tests and lint work out of the box. There is no deployment
+workflow and no production-readiness claim.
+
+Direct package versions and transitive dependencies are pinned in
+`package-lock.json` and the hashed `requirements*.txt` files. Keep these locks
+under version control. Their `.in` inputs record direct Python dependencies.
+Changing dependencies requires deliberate lock regeneration and revalidation.

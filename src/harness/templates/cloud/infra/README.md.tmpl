@@ -1,0 +1,143 @@
+# DEV infrastructure: GCP Cloud Run
+
+This is a scoped, stateless fullstack path: one linux/amd64 image serves built React
+assets and the FastAPI API on the same origin. It requires OpenTelemetry and uses
+console JSON logs/spans/metrics. Cloud Run collects stdout/stderr; these exports do
+not imply native Cloud Trace/Monitoring ingestion or a configured OTLP collector.
+
+`workload.json` is provider-independent metadata (HTTP container, component names,
+resources, ports, health paths and authenticated access). GCP Cloud Run has an
+experimental renderer. Azure Container Apps has a separate experimental renderer
+with environment-internal access; AWS ECS remains planned.
+Database, cache, storage, AI, application auth/admin, jobs and scheduler combinations
+are deliberately rejected by this initial cloud renderer.
+
+## Versions and local verification
+
+Use Terraform **1.15.8** and the locked official Google provider **8.6.0**. The lock
+contains verified darwin_arm64 and linux_amd64 hashes. Terraform uses its BSL license;
+the Google provider uses MPL-2.0. The application runtime does not depend on Terraform.
+
+```bash
+terraform fmt -check -recursive infra/gcp
+terraform -chdir=infra/gcp/bootstrap init -backend=false -lockfile=readonly
+terraform -chdir=infra/gcp/bootstrap validate
+terraform -chdir=infra/gcp/service init -backend=false -lockfile=readonly
+terraform -chdir=infra/gcp/service validate
+terraform -chdir=infra/gcp/service test
+make cloud-build
+docker run --rm -p 127.0.0.1:8080:8080 harness-cloud-dev
+```
+
+The Terraform tests use a mock provider and do not create cloud resources. The Core
+smoke additionally runs real-provider `terraform plan -refresh=false` against empty
+local states, a fictitious project, an invalid token and an unreachable HTTP proxy.
+This verifies schemas, expressions and planned resources without Google credentials.
+It does not verify project access, quotas, organization policies or remote image
+availability. No saved synthetic plan should be applied; the smoke removes it.
+
+## Before a real deployment
+
+Select an explicitly authorized disposable GCP project with billing enabled. No
+project is inferred from the workstation's active gcloud configuration. The example
+tfvars contain a fictitious project and all-zero image digest; replace both.
+
+Obtain Application Default Credentials or your organization's workload identity
+configuration outside Terraform. Never write tokens or service-account keys into
+project.yaml, HCL or tfvars. For an interactive workstation, the documented gcloud
+route is `gcloud auth application-default login`; execute it only for the selected
+account/project. Registry pushes use gcloud/Docker credentials independently of ADC.
+
+The operator needs permission to enable the three APIs, create the repository,
+create a runtime service account, deploy Cloud Run and act as that runtime identity.
+Typical scoped roles are Service Usage Admin, Artifact Registry Admin for bootstrap,
+Cloud Run Admin, Service Account Admin and Service Account User for deployment.
+Image publishers need Artifact Registry Writer. Follow your project's IAM policy;
+this module does not grant broad project roles or generate credential keys.
+
+Default state is local for isolated DEV. For a shared environment first configure
+the GCS backend using each root's `backend.tf.example`: a separately created and
+restricted state bucket, versioning and distinct prefixes for bootstrap/service.
+State and tfvars are ignored by Git; keep state backed up and treat it as sensitive.
+Do not copy state or plan files into the application image.
+
+## 1. Bootstrap the image repository
+
+From the generated project root, copy `infra/gcp/bootstrap/dev.tfvars.example`
+to `infra/gcp/bootstrap/terraform.tfvars`, select project_id and region, then:
+
+```bash
+terraform -chdir=infra/gcp/bootstrap init -lockfile=readonly
+terraform -chdir=infra/gcp/bootstrap plan -out=bootstrap.tfplan
+# Review the concrete plan and authorized costs before applying it.
+terraform -chdir=infra/gcp/bootstrap apply bootstrap.tfplan
+terraform -chdir=infra/gcp/bootstrap output -raw image_repository
+```
+
+Bootstrap enables Artifact Registry, Cloud Run and IAM APIs and creates only the
+image repository. It does not deploy a placeholder service. API activation can have
+propagation delay; verify it is ready before deploying the service. Reusing an
+existing repository requires intentional import, not a destructive replacement.
+
+## 2. Build and publish the real image
+
+Use the repository URL from the previous output and explicit project/region:
+
+```bash
+gcloud auth configure-docker REGION-docker.pkg.dev
+docker buildx build --platform linux/amd64 -f Dockerfile.cloud \
+  -t REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/application:dev --push .
+```
+
+Resolve the resulting registry digest using the registry/build output. Do not use
+the local Docker image ID or a mutable tag as Terraform's container_image. Cloud Run
+requires linux/amd64; the Dockerfile can be built on ARM using the explicit platform.
+The final image contains no Vite development server, dev test dependencies, tfstate,
+tfvars or host credentials. It runs as a non-root user and honors injected `PORT`.
+
+## 3. Deploy the private service
+
+Copy `infra/gcp/service/dev.tfvars.example` to `terraform.tfvars` in that root and
+set the same project/region. Set container_image to the published application digest
+in this project's repository. `invokers` may contain authenticated user, group or
+serviceAccount members; public members and domain-wide grants are rejected.
+
+```bash
+terraform -chdir=infra/gcp/service init -lockfile=readonly
+terraform -chdir=infra/gcp/service plan -out=service.tfplan
+# Review this plan before applying it.
+terraform -chdir=infra/gcp/service apply service.tfplan
+terraform -chdir=infra/gcp/service output -raw service_url
+```
+
+The service has its own service account with no project roles, requires IAM invoke
+permission, scales from zero to at most two configured instances, and uses one CPU,
+512 MiB RAM, concurrency 40 and a 30-second request timeout. These limits are not a
+spend cap; configure project budgets separately. The platform may briefly exceed
+instance limits during rollouts or maintenance. No public IAM binding is created.
+
+Startup uses `/api/readiness`; liveness uses `/api/health`. For private browser
+access, an authorized principal can use `gcloud run services proxy SERVICE_NAME
+--project PROJECT_ID --region REGION --port 8080`. This proxy is a workstation tool,
+not part of the production image. Then inspect `/`, `/api/health`, `/api/readiness`
+and `/api/openapi.json` through that local authenticated proxy.
+
+## Cleanup and limits
+
+Deletion is deliberately protected. For an authorized cleanup, set the Cloud Run
+resource's deletion_protection to false, review/apply that change, then review the
+service root's destroy plan. Remove the repository's prevent_destroy only when its
+images may be deleted and no deployment depends on them. Destroy service before
+bootstrap. Project API resources use disable_on_destroy=false so cleanup does not
+disable shared project APIs. Do not delete the backing project or unrelated resources.
+
+No cloud deployment is performed by scaffolding or the validation scripts. Runtime
+storage, secrets, networking, collectors, DNS, certificates beyond Cloud Run defaults,
+multi-environment promotion and production CI/CD are outside this path. The separate
+bootstrap/service states prevent an image-upload bootstrap step from deleting a
+previously deployed service. The local Compose workflow remains available.
+
+Sources: [Cloud Run container contract](https://cloud.google.com/run/docs/container-contract),
+[deploying images](https://cloud.google.com/run/docs/deploying),
+[Terraform Google](https://registry.terraform.io/providers/hashicorp/google/8.6.0/docs/resources/cloud_run_v2_service),
+[Terraform plans](https://developer.hashicorp.com/terraform/cli/commands/plan).

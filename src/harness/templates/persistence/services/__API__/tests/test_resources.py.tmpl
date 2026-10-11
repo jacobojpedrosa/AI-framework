@@ -1,0 +1,18 @@
+from fastapi.testclient import TestClient
+
+from app.infrastructure.bootstrap import create_app
+from app.infrastructure.resources import Resources
+from tests.fakes import StaticProbe
+
+
+def test_resources_participate_in_readiness_and_close():
+    closed = []
+    resources = Resources(
+        probes={"dependency": StaticProbe(False)}, closers=[lambda: closed.append(1)]
+    )
+    with TestClient(create_app(resources=resources)) as client:
+        response = client.get("/api/readiness")
+        assert response.status_code == 503
+        assert {"name": "dependency", "available": False} in response.json()["checks"]
+        assert client.get("/api/health").status_code == 200
+    assert closed == [1]

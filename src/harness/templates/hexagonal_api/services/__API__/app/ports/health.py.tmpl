@@ -1,0 +1,14 @@
+from datetime import datetime
+from typing import Protocol
+
+
+class Probe(Protocol):
+    """Return a bool promptly; adapters own timeouts for external I/O."""
+
+    def check(self) -> bool: ...
+
+
+class Clock(Protocol):
+    """Return a timezone-aware UTC datetime."""
+
+    def now(self) -> datetime: ...

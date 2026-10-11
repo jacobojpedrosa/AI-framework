@@ -1,0 +1,59 @@
+import time
+
+import jwt
+
+from app.domain.identity import Principal
+
+
+def claims_identity(claims: dict) -> tuple[Principal, int]:
+    subject = claims.get("sub")
+    expires = claims.get("exp")
+    if not isinstance(subject, str) or not 1 <= len(subject) <= 128:
+        raise ValueError("Invalid identity")
+    if not isinstance(expires, (int, float)) or expires <= time.time():
+        raise ValueError("Invalid identity")
+    groups = []
+    for name in ("roles", "permissions"):
+        values = claims.get(name, [])
+        if not isinstance(values, list) or len(values) > 64:
+            raise ValueError("Invalid identity")
+        if not all(isinstance(v, str) and len(v) <= 100 for v in values):
+            raise ValueError("Invalid identity")
+        groups.append(frozenset(values))
+    return Principal(subject, *groups), int(expires)
+
+
+class FirebaseVerifier:
+    def __init__(self, project: str):
+        self.project = project
+        self.keys = jwt.PyJWKClient(
+            "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com",
+            timeout=10,
+            lifespan=300,
+        )
+
+    def verify(self, token: str) -> tuple[Principal, int]:
+        if not isinstance(token, str) or len(token) > 16384:
+            raise ValueError("Invalid identity")
+        try:
+            header = jwt.get_unverified_header(token)
+            if header.get("alg") != "RS256" or not isinstance(header.get("kid"), str):
+                raise ValueError("Invalid identity")
+            key = self.keys.get_signing_key_from_jwt(token).key
+            claims = jwt.decode(
+                token,
+                key,
+                algorithms=["RS256"],
+                audience=self.project,
+                issuer="https://securetoken.google.com/" + self.project,
+                options={
+                    "require": ["exp", "iat", "sub", "aud", "iss", "auth_time"],
+                    "strict_aud": True,
+                },
+            )
+            auth_time = claims["auth_time"]
+            if not isinstance(auth_time, (int, float)) or not 0 < auth_time <= time.time():
+                raise ValueError("Invalid identity")
+            return claims_identity(claims)
+        except Exception:
+            raise ValueError("Invalid identity") from None

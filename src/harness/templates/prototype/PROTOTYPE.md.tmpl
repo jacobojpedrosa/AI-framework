@@ -1,0 +1,57 @@
+# Functional collection prototype
+
+Input: `product/product.yaml`. Product rationale, flows and supplied references:
+`product/PRODUCT.md`. The Harness generated this example without calling a model.
+The project does not depend on the Harness at runtime.
+
+```bash
+make up
+# Open http://127.0.0.1:5173
+make test
+make lint
+```
+
+Routes: `#/` lists and filters the collection, `#/new` creates an item, and
+`#/items/<id>` loads its detail. Refresh and browser back work on these hash routes.
+The frontend talks to a real API through the Vite same-origin proxy. It does not
+pretend a write succeeded or fall back to fixtures when the API is unavailable.
+
+Contract: `GET /api/items`, `GET /api/items/{id}`, `POST /api/items` with title,
+description and a declared status. FastAPI publishes OpenAPI at `/api/openapi.json`
+and interactive docs at `/api/docs`. Responses use 201 plus Location for creation,
+404 for missing items, 422 for invalid payloads, 409 when the memory limit is reached.
+Domain and use cases use repository ports; the in-memory adapter is replaceable.
+
+Browser E2E against the running web/API (Node 24 required on the host):
+
+```bash
+cd apps/web
+npm ci --ignore-scripts --no-audit --no-fund
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright" npx --no-install playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright" npm run test:e2e
+```
+
+Set `E2E_BASE_URL` if using another local port. Tests run Chromium desktop and mobile
+emulation, with real create/list/detail requests, reload/back, filtering, input
+validation, missing-record and simulated network-failure recovery. Browser tests
+add synthetic records; restart the API to return to initial seeds. Screenshots and
+traces of failures appear in `apps/web/test-results`; HTML report in `playwright-report`.
+
+This renderer supports exactly one entity with `title`, `description`, `status` and
+list/detail/create screens. It rejects unsupported entities, screens and external/AI
+integrations. Free-text constraints and visual directions are preserved for human/host
+review, not automatically implemented. Only product content, status choices and the
+accent color are applied deterministically. References are copied to documentation,
+not embedded into the UI or interpreted by the generator.
+
+Local prototype only: no login, public deployment, durable storage, update/delete,
+attachments or AI. Up to 1000 items live in one API process; they survive browser
+reload but reset on API restart and are not shared between workers. Use synthetic
+data only. Compose binds host ports to loopback. Request schemas reject unknown
+fields and bound text lengths. No credentials belong in this prototype.
+
+The default visual layout uses English UI labels and system fonts; product content
+can be supplied in another language, but the renderer does not localize all UI text.
+Use `skills/project-design/SKILL.md` in a capable host to continue design work.
+This file is provided for explicit use; no global skill installation occurs.
+OpenSpec retains ownership of change workflows; Agent OS retains standards.

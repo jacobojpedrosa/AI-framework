@@ -1,0 +1,15 @@
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Schedule:
+    name: str
+    job: str
+    enabled: bool = False
+    interval_seconds: int = 60
+
+    def __post_init__(self):
+        if type(self.enabled) is not bool:
+            raise ValueError("Enabled must be boolean")
+        if type(self.interval_seconds) is not int or not 1 <= self.interval_seconds <= 86400:
+            raise ValueError("Interval must be an integer between 1 and 86400 seconds")

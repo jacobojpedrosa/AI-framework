@@ -1,0 +1,20 @@
+from app.domain.items import Item
+from app.ports.items import ItemRepository
+
+
+class Items:
+    def __init__(self, repository: ItemRepository, statuses: tuple[str, ...]):
+        self.repository = repository
+        self.statuses = statuses
+
+    def list(self) -> tuple[Item, ...]:
+        return self.repository.list()
+
+    def get(self, item_id: str) -> Item | None:
+        return self.repository.get(item_id)
+
+    def create(self, title: str, description: str, status: str) -> Item:
+        title = title.strip()
+        if not title or len(title) > 80 or len(description) > 2000 or status not in self.statuses:
+            raise ValueError("Invalid item")
+        return self.repository.add(title, description, status)

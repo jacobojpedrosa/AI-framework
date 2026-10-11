@@ -1,0 +1,32 @@
+import assert from "node:assert/strict";
+import { afterEach, mock, test } from "node:test";
+import { checkApi } from "../src/api.ts";
+
+afterEach(() => mock.restoreAll());
+
+test("uses the same-origin API and returns its service", async () => {
+  const fetchMock = mock.method(globalThis, "fetch", async (url) => {
+    assert.equal(url, "/api/health");
+    return new Response(JSON.stringify({ status: "ok", service: "@@API@@" }));
+  });
+  assert.equal(await checkApi(), "@@API@@");
+  assert.equal(fetchMock.mock.callCount(), 1);
+});
+
+test("rejects HTTP failures", async () => {
+  mock.method(
+    globalThis,
+    "fetch",
+    async () => new Response("Unavailable", { status: 503 }),
+  );
+  await assert.rejects(checkApi(), /not available/);
+});
+
+test("rejects an unexpected response shape", async () => {
+  mock.method(
+    globalThis,
+    "fetch",
+    async () => new Response(JSON.stringify({ status: "broken" })),
+  );
+  await assert.rejects(checkApi(), /unexpected/);
+});

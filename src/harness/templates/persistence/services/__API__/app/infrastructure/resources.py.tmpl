@@ -1,0 +1,56 @@
+import os
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+from app.infrastructure.persistence_settings import CACHE_ENABLED, DATABASE, VECTOR_ENABLED
+from app.ports.health import Probe
+
+
+@dataclass
+class Resources:
+    repository: object | None = None
+    vectors: object | None = None
+    cache: object | None = None
+    probes: dict[str, Probe] = field(default_factory=dict)
+    closers: list[Callable[[], None]] = field(default_factory=list)
+
+    def close(self) -> None:
+        for close in reversed(self.closers):
+            close()
+
+
+def create_resources() -> Resources:
+    resources = Resources()
+    try:
+        if DATABASE == "memory":
+            from app.adapters.memory_repository import MemoryRepository
+
+            resources.repository = MemoryRepository()
+            resources.probes["database"] = resources.repository
+        elif DATABASE in ("sqlite", "postgres"):
+            from app.adapters.sql_repository import SqlRepository, open_engine
+
+            default = "sqlite:///data/app.db" if DATABASE == "sqlite" else ""
+            url = os.environ.get("DATABASE_URL", default)
+            required = "sqlite:///" if DATABASE == "sqlite" else "postgresql+psycopg://"
+            if not url.startswith(required):
+                raise ValueError("DATABASE_URL does not match the generated provider")
+            engine = open_engine(url)
+            resources.closers.append(engine.dispose)
+            resources.repository = SqlRepository(engine)
+            resources.probes["database"] = resources.repository
+            if VECTOR_ENABLED:
+                from app.adapters.pgvector_store import PgVectorStore
+
+                resources.vectors = PgVectorStore(engine)
+                resources.probes["vector"] = resources.vectors
+        if CACHE_ENABLED:
+            from app.adapters.redis_cache import RedisCache
+
+            resources.cache = RedisCache(os.environ["REDIS_URL"])
+            resources.closers.append(resources.cache.close)
+            resources.probes["cache"] = resources.cache
+        return resources
+    except Exception:
+        resources.close()
+        raise

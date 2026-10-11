@@ -1,0 +1,43 @@
+schema_version: 1
+project:
+  name: example-fullstack-ai
+architecture:
+  golden_path: fullstack-ai
+  hexagonal_services: true
+apps:
+  web:
+    framework: react
+services:
+  api:
+    framework: fastapi
+database:
+  provider: postgres
+  vector: pgvector
+cache:
+  provider: redis
+ai:
+  providers: [openai]
+storage:
+  provider: gcs
+auth:
+  provider: oidc
+  authorization: roles
+admin:
+  enabled: true
+  provider: starlette-admin
+  resources: []
+jobs:
+  enabled: true
+  adapter: taskiq
+  broker: redis
+scheduler:
+  enabled: true
+  adapter: taskiq
+  store: redis
+observability:
+  provider: opentelemetry
+cloud:
+  provider: gcp
+  target: cloud-run
+iac:
+  provider: terraform

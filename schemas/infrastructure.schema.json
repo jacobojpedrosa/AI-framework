@@ -1,0 +1,160 @@
+{
+  "$defs": {
+    "Workload": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "const": "http-container",
+          "default": "http-container",
+          "title": "Kind",
+          "type": "string"
+        },
+        "components": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Components",
+          "type": "array"
+        },
+        "architecture": {
+          "const": "linux/amd64",
+          "default": "linux/amd64",
+          "title": "Architecture",
+          "type": "string"
+        },
+        "port": {
+          "const": 8080,
+          "default": 8080,
+          "title": "Port",
+          "type": "integer"
+        },
+        "stateless": {
+          "const": true,
+          "default": true,
+          "title": "Stateless",
+          "type": "boolean"
+        },
+        "access": {
+          "default": "authenticated",
+          "enum": [
+            "authenticated",
+            "environment-internal"
+          ],
+          "title": "Access",
+          "type": "string"
+        },
+        "health_path": {
+          "default": "/api/health",
+          "title": "Health Path",
+          "type": "string"
+        },
+        "readiness_path": {
+          "default": "/api/readiness",
+          "title": "Readiness Path",
+          "type": "string"
+        },
+        "cpu": {
+          "const": 1,
+          "default": 1,
+          "title": "Cpu",
+          "type": "integer"
+        },
+        "memory_mib": {
+          "default": 512,
+          "enum": [
+            512,
+            2048
+          ],
+          "title": "Memory Mib",
+          "type": "integer"
+        },
+        "min_instances": {
+          "const": 0,
+          "default": 0,
+          "title": "Min Instances",
+          "type": "integer"
+        },
+        "max_instances": {
+          "const": 2,
+          "default": 2,
+          "title": "Max Instances",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "components"
+      ],
+      "title": "Workload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "environment": {
+      "const": "dev",
+      "default": "dev",
+      "title": "Environment",
+      "type": "string"
+    },
+    "provider": {
+      "enum": [
+        "gcp",
+        "aws",
+        "azure"
+      ],
+      "title": "Provider",
+      "type": "string"
+    },
+    "target": {
+      "enum": [
+        "cloud-run",
+        "ecs",
+        "container-apps"
+      ],
+      "title": "Target",
+      "type": "string"
+    },
+    "renderer_status": {
+      "enum": [
+        "experimental",
+        "planned"
+      ],
+      "title": "Renderer Status",
+      "type": "string"
+    },
+    "workloads": {
+      "items": {
+        "$ref": "#/$defs/Workload"
+      },
+      "title": "Workloads",
+      "type": "array"
+    },
+    "persistent_resources": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Persistent Resources",
+      "type": "array"
+    }
+  },
+  "required": [
+    "provider",
+    "target",
+    "renderer_status",
+    "workloads"
+  ],
+  "title": "Infrastructure",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

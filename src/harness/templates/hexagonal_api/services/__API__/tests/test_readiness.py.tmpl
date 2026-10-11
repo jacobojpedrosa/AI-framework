@@ -1,0 +1,56 @@
+import pytest
+from fastapi.testclient import TestClient
+
+from app.application.readiness import CheckReadiness
+from app.infrastructure.bootstrap import SERVICE_NAME, create_app
+from tests.fakes import FrozenClock, RaisingProbe, StaticProbe
+
+
+def test_use_case_with_fake_ports():
+    clock = FrozenClock()
+    probes = {"z": StaticProbe(), "a": StaticProbe()}
+    use_case = CheckReadiness("test", probes, clock)
+    probes.clear()
+    result = use_case.execute()
+    assert result.ready
+    assert result.checked_at == clock.instant
+    assert [check.name for check in result.checks] == ["a", "z"]
+
+
+@pytest.mark.parametrize("probe", [StaticProbe(False), RaisingProbe()])
+def test_unavailable_probe_is_reported_without_error_details(probe):
+    use_case = CheckReadiness(SERVICE_NAME, {"dependency": probe}, FrozenClock())
+    with TestClient(create_app(use_case)) as client:
+        response = client.get("/api/readiness")
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "unavailable",
+            "service": SERVICE_NAME,
+            "checked_at": "2026-01-01T00:00:00Z",
+            "checks": [{"name": "dependency", "available": False}],
+        }
+        # A failing dependency must not turn process liveness into readiness.
+        assert client.get("/api/health").status_code == 200
+
+
+def test_default_adapter_and_http_contract():
+    with TestClient(create_app()) as client:
+        response = client.get("/api/readiness")
+        assert response.status_code == 200
+        assert response.json()["checks"] == [{"name": "process", "available": True}]
+        schema = client.get("/api/openapi.json").json()
+        assert "503" in schema["paths"]["/api/readiness"]["get"]["responses"]
+
+
+def test_no_empty_readiness():
+    with pytest.raises(ValueError, match="At least one"):
+        CheckReadiness("test", {}, FrozenClock())
+
+
+def test_invalid_adapter_does_not_report_ready():
+    class BrokenProbe:
+        def check(self):
+            return "yes"
+
+    result = CheckReadiness("test", {"bad": BrokenProbe()}, FrozenClock()).execute()
+    assert not result.ready

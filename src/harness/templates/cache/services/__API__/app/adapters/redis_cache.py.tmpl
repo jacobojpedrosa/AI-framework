@@ -1,0 +1,38 @@
+from redis import Redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
+
+from app.domain.cache import validate_cache_entry, validate_cache_key
+
+
+class RedisCache:
+    def __init__(self, url: str, namespace: str = "app") -> None:
+        validate_cache_key(namespace)
+        self._prefix = namespace.encode().hex() + ":"
+        self._client = Redis.from_url(
+            url,
+            decode_responses=False,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            retry=Retry(NoBackoff(), 0),
+        )
+
+    def _key(self, key: str) -> str:
+        validate_cache_key(key)
+        return self._prefix + key
+
+    def set(self, key: str, value: bytes, ttl_seconds: int) -> None:
+        validate_cache_entry(key, value, ttl_seconds)
+        self._client.set(self._key(key), value, ex=ttl_seconds)
+
+    def get(self, key: str) -> bytes | None:
+        return self._client.get(self._key(key))
+
+    def delete(self, key: str) -> bool:
+        return self._client.delete(self._key(key)) == 1
+
+    def check(self) -> bool:
+        return self._client.ping() is True
+
+    def close(self) -> None:
+        self._client.close()

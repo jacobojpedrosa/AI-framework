@@ -1,0 +1,62 @@
+import json
+
+import pytest
+
+from app.domain.ai import AIError, TextRequest
+from app.infrastructure.ai_configuration import AIConfigurationProbe, read_settings
+from app.infrastructure.ai_settings import ENABLED_PROVIDERS
+
+
+@pytest.mark.parametrize("provider", ENABLED_PROVIDERS)
+def test_configuration_without_real_credentials(provider):
+    env = {
+        "AI_PROVIDER": provider,
+        provider.upper() + "_MODEL": "test-model",
+        provider.upper() + "_API_KEY": "secret-for-test",
+        "GOOGLE_CLOUD_PROJECT": "test-project",
+        "GOOGLE_CLOUD_LOCATION": "us-central1",
+    }
+    settings = read_settings(env)
+    assert settings.provider == provider
+    assert "secret-for-test" not in repr(settings)
+
+
+def test_unknown_provider_never_falls_back():
+    with pytest.raises(AIError, match="configuration"):
+        read_settings({"AI_PROVIDER": "not-enabled"})
+
+
+@pytest.mark.parametrize("provider", [name for name in ENABLED_PROVIDERS if name != "fake"])
+def test_missing_model_or_key_is_not_healthy(provider, monkeypatch):
+    for key in (
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "OPENAI_MODEL",
+        "GEMINI_MODEL",
+        "VERTEX_MODEL",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("AI_PROVIDER", provider)
+    assert not AIConfigurationProbe().check()
+
+
+def test_prompt_validation():
+    for prompt in ("", " ", "x" * 16001):
+        with pytest.raises(ValueError):
+            TextRequest(prompt)
+    for tokens in (0, True, 2049):
+        with pytest.raises(ValueError):
+            TextRequest("hello", tokens)
+
+
+def test_check_output_is_sanitized(monkeypatch, capsys):
+    from app.infrastructure.ai_cli import main
+
+    monkeypatch.setenv("AI_PROVIDER", "invalid-secret-value")
+    monkeypatch.setattr("sys.argv", ["ai_cli", "check"])
+    assert main() == 1
+    output = capsys.readouterr()
+    assert json.loads(output.out) == {"status": "error", "code": "configuration"}
+    assert output.err == ""

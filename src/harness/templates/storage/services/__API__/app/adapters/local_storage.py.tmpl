@@ -1,0 +1,49 @@
+import hashlib
+import os
+from pathlib import Path
+
+from app.domain.files import FileMetadata, validate_key
+
+
+class LocalStorage:
+    def __init__(self, root: str, max_bytes: int = 25_000_000):
+        self.root = Path(root).resolve()
+        self.max_bytes = max_bytes
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def _path(self, tenant: str, key: str) -> Path:
+        if not tenant or "/" in tenant or "\\" in tenant or tenant in {".", ".."}:
+            raise ValueError("Invalid tenant")
+        validate_key(key)
+        path = (self.root / tenant / key).resolve()
+        if self.root not in path.parents:
+            raise ValueError("Invalid object key")
+        return path
+
+    def put(self, tenant: str, key: str, data: bytes, content_type: str) -> FileMetadata:
+        if not isinstance(data, bytes) or len(data) > self.max_bytes:
+            raise ValueError("File exceeds configured size")
+        if not content_type or len(content_type) > 200 or "\n" in content_type:
+            raise ValueError("Invalid content type")
+        path = self._path(tenant, key)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = path.with_name("." + path.name + ".tmp")
+        with temporary.open("wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        return FileMetadata(key, content_type, len(data), hashlib.sha256(data).hexdigest())
+
+    def get(self, tenant: str, key: str) -> tuple[FileMetadata, bytes]:
+        path = self._path(tenant, key)
+        data = path.read_bytes()
+        return FileMetadata(key, "application/octet-stream", len(data), hashlib.sha256(data).hexdigest()), data
+
+    def delete(self, tenant: str, key: str) -> bool:
+        path = self._path(tenant, key)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True

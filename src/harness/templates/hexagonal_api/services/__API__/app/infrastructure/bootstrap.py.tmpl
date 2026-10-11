@@ -1,0 +1,21 @@
+from fastapi import FastAPI
+
+from app.adapters.http import health_router
+from app.adapters.local import ProcessProbe, SystemClock
+from app.application.readiness import CheckReadiness
+
+SERVICE_NAME = "@@API@@"
+
+
+def create_app(readiness: CheckReadiness | None = None) -> FastAPI:
+    app = FastAPI(
+        title="@@PROJECT@@",
+        version="0.1.0",
+        docs_url="/api/docs",
+        redoc_url=None,
+        openapi_url="/api/openapi.json",
+    )
+    if readiness is None:
+        readiness = CheckReadiness(SERVICE_NAME, {"process": ProcessProbe()}, SystemClock())
+    app.include_router(health_router(SERVICE_NAME, readiness))
+    return app

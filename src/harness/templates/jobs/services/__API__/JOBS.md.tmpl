@@ -1,0 +1,66 @@
+# Registered jobs and schedules
+
+Jobs use `JobQueuePort`; schedules use `SchedulerPort`. The domain and application
+layers import neither Taskiq nor Redis. Register handlers in
+`app/infrastructure/job_registry.py`; `heartbeat` is a harmless example. Parameters,
+Python import paths, expressions and uploaded code are not accepted by the management UI.
+All example schedules start **disabled**.
+
+From the generated project after `make up`:
+
+```
+harness jobs list
+harness jobs run heartbeat
+harness schedules list
+```
+
+These development commands call Docker Compose with an argument list, execute the
+generated application's CLI in the running API container and propagate its exit code.
+The application has no dependency on the Harness. Equivalent standalone commands:
+`python -m app.infrastructure.jobs_cli jobs list`, `jobs run heartbeat`, `schedules list`.
+
+## Memory
+
+Memory mode runs its consumer and scheduler inside the API lifespan. Queue capacity
+is 1000, the last 100 results are retained, and missed intervals coalesce into one job.
+State is process-local and lost on restart. CLI runs use their own process: a memory
+job is queued and consumed before the command exits; schedule listing shows registered
+defaults. Changes in an API process are visible in that process's admin. Use one API
+process for this development mode. There is no separate worker container in memory mode.
+
+## Taskiq + Redis
+
+Taskiq uses Redis Streams, a worker process and, when enabled, a scheduler process.
+The dedicated `jobs-redis` service has an AOF volume, separate from disposable cache data.
+`make down` preserves this volume. Configure `JOBS_REDIS_URL` and `JOBS_NAMESPACE` in
+API, worker and scheduler consistently. Credentials use environment configuration;
+there is no public Redis port. Production Redis access must be restricted to trusted
+application processes. No untrusted callers should be able to publish broker messages.
+
+The worker acknowledges after execution. Delivery can repeat following a crash;
+handlers must be idempotent. There is no exactly-once guarantee, automatic business
+retry policy, dead-letter queue or stream retention policy in this provisional adapter.
+Results expire after one hour. Run **one scheduler replica**; this phase does not
+implement distributed scheduler leadership. Interval timing is controlled by Taskiq;
+changing or disabling a schedule is checked again before enqueueing. An already queued
+job cannot be cancelled by disabling its schedule. AOF `everysec` has Redis's usual
+up-to-one-second crash-loss window; it is not a no-loss guarantee.
+
+## Administration
+
+Select `admin.resources: [schedules]` together with enabled jobs, scheduler and auth.
+The authenticated `/admin/schedules` page lists only registered schedules. It changes
+enabled state and intervals (1–86400 seconds), with CSRF protection and input validation.
+In permissions mode the user needs `admin:access`, `schedules:read` and, for mutations,
+`schedules:write`; roles mode requires `admin`. Existing `AUTH_ADMIN_SUBJECTS` restrictions
+also apply to remote identities. Never add a default password. Local development over
+HTTP requires explicit `AUTH_COOKIE_SECURE=false`; HTTPS secure cookies remain the default.
+
+## Verification
+
+`make test-contracts` runs memory contracts and, for Taskiq, real SDK tests with an
+in-memory transport. To test the Redis store use `TEST_JOBS_REDIS_URL` when running
+`pytest tests/contracts/test_taskiq_jobs.py`. `scripts/smoke_jobs.py` in the Harness
+repository additionally starts real Docker worker/scheduler processes, observes queued
+and scheduled results, verifies CLI and authenticated schedule management, and cleans up
+only its own temporary project and volumes. No external cloud accounts are required.

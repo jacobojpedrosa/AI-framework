@@ -1,0 +1,22 @@
+from app.domain.records import Record, validate_key
+from app.ports.repository import Repository
+
+
+class ManageRecords:
+    def __init__(self, repository: Repository):
+        self.repository = repository
+
+    def get(self, key: str) -> Record | None:
+        validate_key(key)
+        return self.repository.get(key)
+
+    def save(self, key: str, value: str) -> Record:
+        if len(value) > 10000:
+            raise ValueError("Value exceeds 10000 characters")
+        record = Record(key, value)
+        self.repository.put(record)
+        return record
+
+    def delete(self, key: str) -> bool:
+        validate_key(key)
+        return self.repository.delete(key)

@@ -1,0 +1,52 @@
+import os
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+
+from app.domain.ai import AIError
+from app.infrastructure.ai_settings import ENABLED_PROVIDERS
+
+
+@dataclass(frozen=True)
+class AISettings:
+    provider: str
+    model: str
+    api_key: str = field(default="", repr=False)
+    project: str = ""
+    location: str = ""
+
+
+def read_settings(env: Mapping[str, str] | None = None) -> AISettings:
+    env = os.environ if env is None else env
+    default = "fake" if "fake" in ENABLED_PROVIDERS else ENABLED_PROVIDERS[0]
+    provider = env.get("AI_PROVIDER") or default
+    if provider not in ENABLED_PROVIDERS:
+        raise AIError("configuration")
+    if provider == "fake":
+        return AISettings(provider, "fake-v1")
+    model = env.get(provider.upper() + "_MODEL", "")
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}", model):
+        raise AIError("configuration")
+    if provider in ("openai", "gemini"):
+        key = env.get(provider.upper() + "_API_KEY", "")
+        if not key.strip():
+            raise AIError("configuration")
+        return AISettings(provider, model, api_key=key)
+    project = env.get("GOOGLE_CLOUD_PROJECT", "")
+    location = env.get("GOOGLE_CLOUD_LOCATION", "")
+    if not re.fullmatch(r"[a-z][a-z0-9-]{4,61}[a-z0-9]", project):
+        raise AIError("configuration")
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", location):
+        raise AIError("configuration")
+    return AISettings(provider, model, project=project, location=location)
+
+
+class AIConfigurationProbe:
+    """Readiness checks local configuration only, never credentials or billing."""
+
+    def check(self) -> bool:
+        try:
+            read_settings()
+            return True
+        except AIError:
+            return False

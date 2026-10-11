@@ -1,0 +1,19 @@
+variable "project_id" {
+  description = "Existing, authorized GCP DEV project with billing enabled."
+  type        = string
+  nullable    = false
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", var.project_id))
+    error_message = "Use a valid GCP project ID."
+  }
+}
+variable "region" {
+  description = "Deployment region; verify availability in the target project."
+  type        = string
+  default     = "europe-west1"
+  nullable    = false
+  validation {
+    condition     = can(regex("^[a-z]+(-[a-z]+)+[0-9]$", var.region))
+    error_message = "Use a GCP region name."
+  }
+}

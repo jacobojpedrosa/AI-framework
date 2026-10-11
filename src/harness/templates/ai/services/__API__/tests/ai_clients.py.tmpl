@@ -1,0 +1,125 @@
+from contextlib import contextmanager
+
+SECRET = "test-only-private-credential"
+PRIVATE_PROMPT = "private test prompt"
+
+
+@contextmanager
+def stub_provider(name, *, status=200, mode="success"):
+    calls = []
+    if name == "fake":
+        from app.adapters.fake_ai import FakeAI
+
+        yield FakeAI(), calls
+        return
+    import httpx
+
+    if name == "openai":
+        import httpx2 as transport_http
+        from openai import OpenAI
+
+        from app.adapters.openai_ai import OpenAIProvider
+    else:
+        transport_http = httpx
+
+    def handle(request):
+        calls.append(request)
+        if mode == "timeout":
+            raise transport_http.ReadTimeout(SECRET, request=request)
+        if status != 200:
+            return transport_http.Response(
+                status,
+                json={
+                    "error": {"message": SECRET, "code": status, "status": "FAILED_PRECONDITION"}
+                },
+            )
+        if request.method == "GET":
+            return transport_http.Response(
+                200,
+                json={
+                    "id": "test-model",
+                    "name": "models/test-model",
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "test",
+                },
+            )
+        if name == "openai":
+            content = (
+                [{"type": "refusal", "refusal": SECRET}]
+                if mode == "blocked"
+                else [
+                    {
+                        "type": "output_text",
+                        "text": "" if mode == "empty" else "Contract response.",
+                        "annotations": [],
+                    }
+                ]
+            )
+            payload = {
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 0,
+                "model": "test-model",
+                "status": "incomplete" if mode == "incomplete" else "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_test",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": content,
+                    }
+                ],
+            }
+        else:
+            reason = (
+                "MAX_TOKENS" if mode == "incomplete" else "SAFETY" if mode == "blocked" else "STOP"
+            )
+            payload = {
+                "candidates": [
+                    {
+                        "finishReason": reason,
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "" if mode == "empty" else "Contract response."}],
+                        },
+                    }
+                ]
+            }
+        return transport_http.Response(200, json=payload)
+
+    transport = transport_http.MockTransport(handle)
+    http_client = transport_http.Client(transport=transport)
+    if name == "openai":
+        client = OpenAI(api_key=SECRET, http_client=http_client, max_retries=0)
+        adapter = OpenAIProvider(client, "test-model")
+    else:
+        from google import genai
+        from google.genai import types
+        from google.oauth2.credentials import Credentials
+
+        from app.adapters.google_ai import GoogleProvider
+
+        options = types.HttpOptions(
+            httpx_client=http_client,
+            api_version="v1",
+            retry_options=types.HttpRetryOptions(attempts=1),
+            timeout=20000,
+        )
+        if name == "gemini":
+            client = genai.Client(vertexai=False, api_key=SECRET, http_options=options)
+        else:
+            client = genai.Client(
+                vertexai=True,
+                project="test-project",
+                location="us-central1",
+                credentials=Credentials(token=SECRET),
+                http_options=options,
+            )
+        adapter = GoogleProvider(client, "test-model", name)
+    try:
+        yield adapter, calls
+    finally:
+        client.close()
+        http_client.close()

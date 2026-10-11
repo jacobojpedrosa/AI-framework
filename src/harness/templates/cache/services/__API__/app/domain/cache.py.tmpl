@@ -1,0 +1,11 @@
+def validate_cache_key(key: str) -> None:
+    if not isinstance(key, str) or not 1 <= len(key) <= 200 or "\0" in key:
+        raise ValueError("Cache keys require 1-200 characters without NUL")
+
+
+def validate_cache_entry(key: str, value: bytes, ttl_seconds: int) -> None:
+    validate_cache_key(key)
+    if type(value) is not bytes:
+        raise ValueError("Cache values must be bytes")
+    if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 86400:
+        raise ValueError("TTL must be an integer between 1 and 86400 seconds")

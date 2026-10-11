@@ -1,0 +1,17 @@
+from dataclasses import dataclass
+
+
+def validate_key(key: str) -> None:
+    if not isinstance(key, str) or not 1 <= len(key) <= 200 or "\0" in key:
+        raise ValueError("Keys must contain 1-200 characters without NUL")
+
+
+@dataclass(frozen=True)
+class Record:
+    key: str
+    value: str
+
+    def __post_init__(self) -> None:
+        validate_key(self.key)
+        if not isinstance(self.value, str) or "\0" in self.value:
+            raise ValueError("Values must be strings without NUL")

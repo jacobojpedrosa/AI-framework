@@ -1,0 +1,49 @@
+import pytest
+
+from app.domain.records import Record
+
+
+def test_missing_and_idempotent_delete(repository):
+    assert repository.get("missing") is None
+    assert repository.delete("missing") is False
+
+
+def test_roundtrip_and_upsert(repository):
+    repository.put(Record("one", "first"))
+    assert repository.get("one") == Record("one", "first")
+    repository.put(Record("one", "second"))
+    assert repository.get("one") == Record("one", "second")
+
+
+def test_delete_only_selected_key(repository):
+    repository.put(Record("one", "first"))
+    repository.put(Record("two", "second"))
+    assert repository.delete("one") is True
+    assert repository.get("one") is None
+    assert repository.delete("one") is False
+    assert repository.get("two") == Record("two", "second")
+
+
+def test_unicode_quotes_and_empty_values(repository):
+    key = "á'; DROP TABLE harness_records;--"
+    repository.put(Record(key, "日本語 ' % \\"))
+    repository.put(Record("empty", ""))
+    assert repository.get(key) == Record(key, "日本語 ' % \\")
+    assert repository.get("empty") == Record("empty", "")
+
+
+@pytest.mark.parametrize("key", ["", "x" * 201, "bad\0key"])
+def test_invalid_keys(repository, key):
+    with pytest.raises(ValueError):
+        Record(key, "value")
+    with pytest.raises(ValueError):
+        repository.get(key)
+    with pytest.raises(ValueError):
+        repository.delete(key)
+
+
+def test_case_sensitive_keys(repository):
+    repository.put(Record("A", "upper"))
+    repository.put(Record("a", "lower"))
+    assert repository.get("A").value == "upper"
+    assert repository.get("a").value == "lower"

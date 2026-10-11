@@ -1,0 +1,14 @@
+apps:
+  web:
+    framework: react
+architecture:
+  golden_path: service-platform
+  hexagonal_services: true
+project:
+  name: document-platform
+schema_version: 1
+services:
+  documents:
+    framework: fastapi
+  search:
+    framework: fastapi

@@ -1,0 +1,25 @@
+variable "container_image" {
+  description = "Built linux/amd64 image in this project's repository, pinned by sha256 digest."
+  type        = string
+  nullable    = false
+  validation {
+    condition = can(regex(
+      format("^%s-docker[.]pkg[.]dev/%s/@@CLOUD_RESOURCE@@/application@sha256:[a-f0-9]{64}$", var.region, var.project_id),
+      var.container_image
+    ))
+    error_message = "Use the application image from this project's regional repository, pinned by digest."
+  }
+}
+variable "invokers" {
+  description = "Explicit authenticated users/groups/service accounts. Public access is not supported."
+  type        = set(string)
+  default     = []
+  nullable    = false
+  validation {
+    condition = length(var.invokers) <= 10 && alltrue([
+      for member in var.invokers :
+      can(regex("^(user|group|serviceAccount):[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+[.][a-zA-Z]+$", member))
+    ])
+    error_message = "Provide at most 10 authenticated IAM principals; public members are forbidden."
+  }
+}

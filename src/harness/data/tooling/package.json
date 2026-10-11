@@ -1,0 +1,8 @@
+{
+  "name": "harness-development-tools",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@fission-ai/openspec": "1.13.2"
+  }
+}

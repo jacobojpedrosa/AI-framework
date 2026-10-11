@@ -1,0 +1,68 @@
+import { test, expect } from "@playwright/test";
+import product from "../src/product.json" with { type: "json" };
+
+test("create, read, reload, filter and navigate back", async ({ page }) => {
+  const title = `Browser idea ${Date.now()}`;
+  await page.goto("/#/");
+  await expect(
+    page.getByRole("heading", { name: product.entity.plural, exact: true }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Add an item", exact: true }).click();
+  await page.getByLabel("Title", { exact: false }).fill(title);
+  await page
+    .getByLabel("Description", { exact: true })
+    .fill("A synthetic browser test with a real API.");
+  await page
+    .getByLabel("Status", { exact: true })
+    .selectOption(product.entity.statuses[0]);
+  const saved = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/items") &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Save item" }).click();
+  expect((await saved).status()).toBe(201);
+  await expect(page.getByRole("heading", { name: title })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: title })).toBeVisible();
+  await page.getByRole("link", { name: "Back to collection" }).click();
+  await page.getByRole("searchbox", { name: "Search items" }).fill(title);
+  await expect(page.getByRole("heading", { name: title })).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Filter by status" })
+    .selectOption(product.entity.statuses[0]);
+  await page.getByRole("heading", { name: title }).click();
+  await expect(page).toHaveURL(/#\/items\//);
+  await page.goBack();
+  await expect(page).toHaveURL(/#\/$/);
+  await page.getByRole("searchbox").fill("no-matching-item-00000000");
+  await expect(
+    page.getByRole("heading", { name: "No items found" }),
+  ).toBeVisible();
+});
+
+test("missing item, form validation and network recovery", async ({ page }) => {
+  await page.goto("/#/items/missing");
+  await expect(page.getByRole("alert")).toContainText("could not be found");
+  await page.getByRole("link", { name: "Add an item", exact: true }).click();
+  await page.getByLabel("Title", { exact: false }).fill("   ");
+  await page.getByRole("button", { name: "Save item" }).click();
+  await expect(page.getByRole("alert")).toContainText("Please add a title");
+  await page.route("**/api/items", (route) =>
+    route.fulfill({ status: 503, body: "unavailable" }),
+  );
+  await page.getByRole("link", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "We couldn’t reach your collection",
+  );
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  await page.unroute("**/api/items");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("status")).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});

@@ -1,0 +1,86 @@
+import json
+import logging
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from app.infrastructure.telemetry import JsonFormatter, Telemetry, install_observability
+
+
+@pytest.fixture
+def instrumented(monkeypatch):
+    monkeypatch.setenv("TELEMETRY_EXPORTER", "none")
+    spans = InMemorySpanExporter()
+    traces = TracerProvider()
+    traces.add_span_processor(SimpleSpanProcessor(spans))
+    reader = InMemoryMetricReader()
+    telemetry = Telemetry(traces, MeterProvider(metric_readers=[reader]))
+    app = FastAPI()
+
+    @app.get("/items/{item_id}")
+    def item(item_id: str):
+        return {"ok": True}
+
+    @app.get("/fail")
+    def fail():
+        raise ValueError("secret-exception-value")
+
+    install_observability(app, telemetry)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        yield client, spans, reader
+
+
+def test_remote_parent_correlation_and_bounded_metrics(instrumented, caplog):
+    client, exporter, reader = instrumented
+    parent = "00-11111111111111111111111111111111-2222222222222222-01"
+    with caplog.at_level(logging.INFO, logger="app.requests"):
+        response = client.get(
+            "/items/private-id?token=secret",
+            headers={
+                "traceparent": parent,
+                "x-request-id": "correlation-123",
+                "Authorization": "Bearer secret",
+            },
+        )
+    span = exporter.get_finished_spans()[0]
+    assert span.context.trace_id == int("1" * 32, 16)
+    assert span.parent.span_id == int("2" * 16, 16) and span.parent.is_remote
+    assert response.headers["x-trace-id"] == "1" * 32
+    assert response.headers["x-request-id"] == "correlation-123"
+    assert span.attributes["http.route"] == "/items/{item_id}"
+    log = JsonFormatter().format(caplog.records[-1])
+    assert json.loads(log)["trace_id"] == "1" * 32
+    assert "secret" not in log and "private-id" not in log
+    data = reader.get_metrics_data().to_json()
+    assert "http.server.requests" in data and "http.server.request.duration" in data
+    assert "private-id" not in data and "secret" not in data
+    metrics = json.loads(data)["resource_metrics"][0]["scope_metrics"][0]["metrics"]
+    duration = next(item for item in metrics if item["name"] == "http.server.request.duration")
+    assert duration["data"]["data_points"][0]["explicit_bounds"][0] == 0.005
+
+
+def test_invalid_headers_errors_and_unknown_routes_are_sanitized(instrumented, caplog):
+    client, exporter, _ = instrumented
+    with caplog.at_level(logging.INFO, logger="app.requests"):
+        response = client.get(
+            "/unknown/private", headers={"traceparent": "invalid", "x-request-id": "!bad!"}
+        )
+        assert response.status_code == 404
+        assert response.headers["x-request-id"] != "!bad!"
+        assert client.get("/fail").status_code == 500
+    spans = exporter.get_finished_spans()
+    assert spans[0].parent is None and spans[0].attributes["http.route"] == "unmatched"
+    assert spans[1].status.status_code.name == "ERROR"
+    assert not spans[1].events
+    assert "secret-exception-value" not in str([JsonFormatter().format(r) for r in caplog.records])
+
+
+def test_runtime_logging_does_not_emit_arbitrary_messages_or_exceptions():
+    record = logging.LogRecord("uvicorn.error", logging.ERROR, "", 0, "Bearer secret", (), None)
+    assert "secret" not in JsonFormatter().format(record)

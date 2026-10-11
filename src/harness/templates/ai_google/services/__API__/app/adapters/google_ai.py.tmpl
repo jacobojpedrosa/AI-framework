@@ -1,0 +1,56 @@
+import httpx
+from google.genai import errors, types
+
+from app.adapters.ai_errors import status_error
+from app.domain.ai import AIError, TextRequest, TextResult
+
+
+class GoogleProvider:
+    def __init__(self, client, model: str, provider: str) -> None:
+        self._client = client
+        self._model = model
+        self._provider = provider
+
+    def generate(self, request: TextRequest) -> TextResult:
+        try:
+            response = self._client.models.generate_content(
+                model=self._model,
+                contents=request.prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=request.max_output_tokens,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                ),
+            )
+        except errors.APIError as error:
+            raise status_error(error.code) from None
+        except (httpx.TimeoutException, TimeoutError):
+            raise AIError("timeout") from None
+        except Exception:
+            raise AIError("unavailable") from None
+        try:
+            if response.prompt_feedback and response.prompt_feedback.block_reason:
+                raise AIError("blocked")
+            if not response.candidates:
+                raise AIError("invalid_response")
+            candidate = response.candidates[0]
+            if candidate.finish_reason == "MAX_TOKENS":
+                raise AIError("incomplete")
+            if candidate.finish_reason != "STOP":
+                raise AIError("blocked")
+            parts = candidate.content.parts if candidate.content else []
+            text = "".join(part.text for part in (parts or []) if part.text and not part.thought)
+            return TextResult(text, self._provider, self._model)
+        except AIError:
+            raise
+        except Exception:
+            raise AIError("invalid_response") from None
+
+    def check_remote(self) -> None:
+        try:
+            self._client.models.get(model=self._model)
+        except errors.APIError as error:
+            raise status_error(error.code) from None
+        except (httpx.TimeoutException, TimeoutError):
+            raise AIError("timeout") from None
+        except Exception:
+            raise AIError("unavailable") from None

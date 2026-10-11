@@ -1,0 +1,30 @@
+import math
+from dataclasses import dataclass
+
+from app.domain.records import validate_key
+
+DIMENSIONS = 3
+
+
+def validate_vector(vector: tuple[float, ...]) -> None:
+    if len(vector) != DIMENSIONS or any(
+        type(value) not in (int, float) or not math.isfinite(value) or abs(value) > 1e10
+        for value in vector
+    ):
+        raise ValueError("Expected three finite numeric components in [-1e10, 1e10]")
+
+
+def validate_limit(limit: int) -> None:
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100")
+
+
+@dataclass(frozen=True)
+class Match:
+    key: str
+    distance: float
+
+
+def validate_embedding(key: str, vector: tuple[float, ...]) -> None:
+    validate_key(key)
+    validate_vector(vector)

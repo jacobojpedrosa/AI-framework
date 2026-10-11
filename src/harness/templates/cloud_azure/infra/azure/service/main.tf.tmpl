@@ -1,0 +1,90 @@
+locals {
+  resource_group_id = format("/subscriptions/%s/resourceGroups/%s", var.subscription_id, local.resource_name)
+  environment_id    = format("%s/providers/Microsoft.App/managedEnvironments/%s", local.resource_group_id, local.resource_name)
+  identity_id       = format("%s/providers/Microsoft.ManagedIdentity/userAssignedIdentities/%s", local.resource_group_id, local.resource_name)
+}
+resource "azurerm_container_app" "app" {
+  name                         = local.resource_name
+  resource_group_name          = local.resource_name
+  container_app_environment_id = local.environment_id
+  revision_mode                = "Single"
+  workload_profile_name        = "Consumption"
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [local.identity_id]
+  }
+  registry {
+    server   = format("%s.azurecr.io", local.registry_name)
+    identity = local.identity_id
+  }
+  ingress {
+    external_enabled           = false
+    allow_insecure_connections = false
+    target_port                = 8080
+    transport                  = "http"
+    traffic_weight {
+      latest_revision = true
+      percentage      = 100
+    }
+  }
+  template {
+    min_replicas = 0
+    max_replicas = 2
+    http_scale_rule {
+      name                = "http"
+      concurrent_requests = "40"
+    }
+    container {
+      name   = "application"
+      image  = var.container_image
+      cpu    = 1
+      memory = "2Gi"
+      env {
+        name  = "PORT"
+        value = "8080"
+      }
+      env {
+        name  = "TELEMETRY_EXPORTER"
+        value = "console"
+      }
+      startup_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/api/readiness"
+        interval_seconds        = 3
+        timeout                 = 2
+        failure_count_threshold = 20
+      }
+      readiness_probe {
+        transport        = "HTTP"
+        port             = 8080
+        path             = "/api/readiness"
+        interval_seconds = 10
+        timeout          = 2
+      }
+      liveness_probe {
+        transport        = "HTTP"
+        port             = 8080
+        path             = "/api/health"
+        interval_seconds = 10
+        timeout          = 2
+      }
+    }
+  }
+  tags = local.tags
+  lifecycle {
+    prevent_destroy = true
+    # CI/CD owns image revisions after initial provisioning.
+    ignore_changes = [template[0].container[0].image]
+  }
+}
+variable "container_image" {
+  type        = string
+  description = "Published application digest from the bootstrap registry, never a mutable tag."
+  validation {
+    condition     = can(regex(format("^%s[.]azurecr[.]io/application@sha256:[a-f0-9]{64}$", local.registry_name), var.container_image))
+    error_message = "Use application@sha256:<64 lowercase hex> from this project's bootstrap registry."
+  }
+}
+output "internal_url" { value = format("https://%s", azurerm_container_app.app.ingress[0].fqdn) }
+output "service_name" { value = azurerm_container_app.app.name }

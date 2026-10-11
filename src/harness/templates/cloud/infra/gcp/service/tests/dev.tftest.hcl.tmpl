@@ -1,0 +1,48 @@
+mock_provider "google" {}
+
+variables {
+  project_id      = "harness-plan-only"
+  region          = "europe-west1"
+  container_image = "europe-west1-docker.pkg.dev/harness-plan-only/@@CLOUD_RESOURCE@@/application@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}
+
+run "private_bounded_service" {
+  command = plan
+  assert {
+    condition     = google_cloud_run_v2_service.app.invoker_iam_disabled == false
+    error_message = "DEV service must require IAM authentication."
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.app.template[0].scaling[0].max_instance_count == 2
+    error_message = "DEV scaling must remain bounded."
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.app.deletion_protection == true
+    error_message = "Accidental deletion must remain protected."
+  }
+  assert {
+    condition     = length(google_cloud_run_v2_service_iam_member.invoker) == 0
+    error_message = "No implicit invokers may be added."
+  }
+}
+
+run "authenticated_invoker" {
+  command = plan
+  variables { invokers = ["user:developer@example.com"] }
+  assert {
+    condition     = google_cloud_run_v2_service_iam_member.invoker["user:developer@example.com"].role == "roles/run.invoker"
+    error_message = "Only the requested invoke permission is granted."
+  }
+}
+
+run "reject_public_access" {
+  command = plan
+  variables { invokers = ["allUsers"] }
+  expect_failures = [var.invokers]
+}
+
+run "reject_mutable_image" {
+  command = plan
+  variables { container_image = "europe-west1-docker.pkg.dev/harness-plan-only/@@CLOUD_RESOURCE@@/application:latest" }
+  expect_failures = [var.container_image]
+}

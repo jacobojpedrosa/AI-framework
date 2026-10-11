@@ -1,0 +1,28 @@
+schema_version: 1
+project:
+  name: jobs-example
+architecture:
+  golden_path: fullstack-ai
+  hexagonal_services: true
+apps:
+  web:
+    framework: react
+services:
+  api:
+    framework: fastapi
+cache:
+  provider: redis
+jobs:
+  enabled: true
+  adapter: taskiq
+  broker: redis
+scheduler:
+  enabled: true
+  adapter: taskiq
+  store: redis
+auth:
+  provider: local
+  authorization: permissions
+admin:
+  enabled: true
+  resources: [schedules]

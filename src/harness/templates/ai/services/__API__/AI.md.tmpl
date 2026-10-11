@@ -1,0 +1,99 @@
+# Interchangeable text providers
+
+`TextProvider.generate(TextRequest) -> TextResult` is shared by fake, OpenAI,
+Gemini Developer API and Vertex AI. `GenerateText` depends only on that port.
+`app.state.ai` is a lazy runtime adapter; it reads configuration when called.
+No public generation HTTP route is created before authentication is implemented.
+
+Only providers selected in `project.yaml` are enabled. The fake implementation
+is included for tests, but cannot be selected at runtime unless enabled. There
+is no implicit fallback to fake after a provider/configuration error.
+
+## Select a provider without changing domain code
+
+| AI_PROVIDER | Required environment |
+| --- | --- |
+| fake | None; enabled fake is the default |
+| openai | OPENAI_API_KEY, OPENAI_MODEL |
+| gemini | GEMINI_API_KEY, GEMINI_MODEL |
+| vertex | VERTEX_MODEL, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, Google ADC credentials |
+
+Use an explicit model ID available to your account. No current/latest model is
+hardcoded. Simple model IDs (including dots, dashes and colons) are accepted;
+custom endpoint URLs and full resource paths are outside this template's scope.
+Vertex uses standard project/location plus Application Default Credentials,
+not the API-key express mode. Gemini and Vertex use the official Google Gen AI
+SDK with explicitly separate client modes. OpenAI uses the official SDK and
+Responses API with `store=False` and no automatic tool execution.
+
+Set variables in the shell for direct Python use or in the root `.env` for
+Compose. `.env` is ignored by Git and is never copied into an image. Credentials
+are supplied only to the API, not the browser. Never put keys into project.yaml.
+For local Vertex containers, provide ADC through a deliberate read-only mount
+in a local Compose override and set GOOGLE_APPLICATION_CREDENTIALS to the
+container path. Host credential files are not discovered or mounted by the harness.
+Managed workload identity is a later deployment concern.
+
+## Configuration, remote checks and generation are separate
+
+```sh
+make ai-check                   # Local validation only; no SDK client/network
+make ai-check-remote            # Explicit credential/model-metadata request
+printf 'Your input here' | make ai-generate       # Fake by default
+printf 'Your input here' | make ai-generate-live  # Explicit real generation
+```
+
+Direct Python equivalents, in the API environment:
+
+```sh
+python -m app.infrastructure.ai_cli check
+python -m app.infrastructure.ai_cli check --remote
+python -m app.infrastructure.ai_cli generate --live < input.txt
+```
+
+`ai-check` and the readiness probe named `ai_configuration` only verify local
+configuration. They **do not validate credentials**, discover ADC or call models.
+The remote check retrieves metadata for the configured model and reports a
+sanitized result. Metadata access does not prove generation permission, billing,
+quota or future availability. A real generation is a separate explicit operation
+and can incur charges. The CLI never generates against a real provider without
+`--live`. Prompts come from stdin and are not placed in shell command arguments.
+
+Diagnostic output excludes keys, raw SDK errors, prompts, model IDs and project
+IDs. Generation output intentionally includes the returned text and configured
+model. Errors use stable codes: configuration, authentication, rate_limited,
+timeout, unavailable, invalid_request, invalid_response, blocked or incomplete.
+SDK diagnostics are disabled by the CLI; do not enable SDK/HTTP debug logging
+around private production traffic in your own application.
+
+## Contract and limits
+
+The contract is non-streaming text generation: 1–16000 prompt characters and
+16–2048 requested output tokens. These caps do not guarantee cost or success for
+every model. Empty text, refusals and truncated/incomplete responses raise a
+sanitized error instead of being returned as successful full answers. Google
+thought parts are excluded from text. Responses remain model output, not trusted
+instructions. No embeddings, tools, agents, structured output or retries are added.
+
+SDK HTTP calls use a 20-second timeout and no automatic retries. Credential
+discovery/refresh follows Google Auth behavior and is not an end-to-end deadline.
+Clients and transports close after explicit operations. The fake returns a
+constant result, not a simulated model or a billing/token estimator.
+
+## Tests and verification scope
+
+`make test` / `make test-contracts` use actual installed SDKs with in-memory HTTP
+transports and synthetic credentials. They verify request shape, switching through
+the same use case, metadata checks, authentication/rate errors, timeouts,
+refusals, truncation, sanitization and no retries without calling providers.
+Vertex uses an explicit synthetic OAuth token in these tests; ADC is not accessed.
+
+Live account verification must use the explicit commands above. Passing local
+contracts is not evidence of live credentials or model availability. SDK versions
+are pinned in requirements and their hashes. Other selected capabilities, such
+as SQL/Redis, retain their own contracts and migration commands.
+
+Official references:
+
+- [OpenAI SDK](https://developers.openai.com/api/docs/libraries)
+- [Google Gen AI SDK](https://googleapis.github.io/python-genai/)

@@ -1,0 +1,13 @@
+from datetime import UTC, datetime
+
+
+class ProcessProbe:
+    """Liveness only: does not assert database, network or provider availability."""
+
+    def check(self) -> bool:
+        return True
+
+
+class SystemClock:
+    def now(self) -> datetime:
+        return datetime.now(UTC)

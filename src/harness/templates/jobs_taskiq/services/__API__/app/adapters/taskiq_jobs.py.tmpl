@@ -1,0 +1,99 @@
+import asyncio
+import json
+from dataclasses import replace
+
+from taskiq import ScheduledTask, ScheduleSource
+from taskiq.exceptions import ScheduledTaskCancelledError
+
+
+class TaskiqQueue:
+    def __init__(self, registry, tasks, broker):
+        self.registry, self.tasks, self.broker = registry, tasks, broker
+        self.started = False
+        self.lock = asyncio.Lock()
+
+    async def enqueue(self, name: str) -> str:
+        self.registry.require(name)
+        async with self.lock:
+            if not self.started:
+                await self.broker.startup()
+                self.started = True
+        return (await self.tasks[name].kiq()).task_id
+
+
+class RedisSchedules:
+    def __init__(self, client, key, definitions):
+        self.client, self.key = client, key
+        self.definitions = {item.name: item for item in definitions}
+
+    async def list(self):
+        names = sorted(self.definitions)
+        if not names:
+            return ()
+        values = await self.client.hmget(self.key, names)
+        result = []
+        for name, value in zip(names, values, strict=True):
+            item = self.definitions[name]
+            if value is not None:
+                data = json.loads(value)
+                if set(data) != {"enabled", "interval_seconds"}:
+                    raise ValueError("Invalid registered schedule")
+                item = replace(item, **data)
+            result.append(item)
+        return tuple(result)
+
+    async def update(self, name, enabled, interval_seconds):
+        if name not in self.definitions:
+            raise ValueError("Unknown registered schedule")
+        updated = replace(
+            self.definitions[name], enabled=enabled, interval_seconds=interval_seconds
+        )
+        await self.client.hset(
+            self.key,
+            name,
+            json.dumps(
+                {
+                    "enabled": updated.enabled,
+                    "interval_seconds": updated.interval_seconds,
+                }
+            ),
+        )
+        return updated
+
+
+class RegisteredScheduleSource(ScheduleSource):
+    def __init__(self, store):
+        self.store = store
+
+    async def startup(self):
+        await self.store.client.ping()
+
+    async def shutdown(self):
+        await self.store.client.aclose()
+
+    async def get_schedules(self):
+        return [
+            ScheduledTask(
+                task_name="jobs." + item.job,
+                schedule_id=item.name,
+                labels={},
+                args=[],
+                kwargs={},
+                interval=item.interval_seconds,
+            )
+            for item in await self.store.list()
+            if item.enabled
+        ]
+
+    async def pre_send(self, task):
+        # Recheck after refresh: disabling a schedule also cancels a cached due entry.
+        current = {item.name: item for item in await self.store.list()}.get(task.schedule_id)
+        if (
+            current is None
+            or not current.enabled
+            or task.task_name != "jobs." + current.job
+            or task.interval != current.interval_seconds
+            or task.args
+            or task.kwargs
+        ):
+            raise ScheduledTaskCancelledError

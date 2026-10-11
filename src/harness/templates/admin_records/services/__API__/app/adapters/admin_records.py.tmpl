@@ -1,0 +1,78 @@
+import html
+
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import HTMLResponse, PlainTextResponse
+from starlette_admin import CustomView, route
+from starlette_admin.security.csrf import csrf_input
+
+from app.application.manage_records import ManageRecords
+
+
+class RecordsView(CustomView):
+    path = "/records"
+    menu_label = "Records"
+    route_name = "records"
+
+    def __init__(self, repository, runtime):
+        super().__init__()
+        self.use_case = ManageRecords(repository)
+        self.runtime = runtime
+
+    def is_accessible(self, request):
+        return self.runtime.admin_allowed(self.runtime.principal(request), "records:read")
+
+    @route("", methods=["GET", "POST"])
+    async def index(self, request):
+        principal = self.runtime.principal(request)
+        if not self.runtime.admin_allowed(principal, "records:read"):
+            return PlainTextResponse("Forbidden", 403)
+        key = request.query_params.get("key", "")
+        value = ""
+        message = ""
+        try:
+            if request.method == "POST":
+                form = await request.form()
+                key = str(form.get("key", ""))
+                action = form.get("action")
+                if action not in {"save", "delete"}:
+                    return PlainTextResponse("Invalid action", 400)
+                permission = "records:write" if action == "save" else "records:delete"
+                if not self.runtime.admin_allowed(principal, permission):
+                    return PlainTextResponse("Forbidden", 403)
+                if action == "save":
+                    await run_in_threadpool(self.use_case.save, key, str(form.get("value", "")))
+                    message = "Saved"
+                else:
+                    await run_in_threadpool(self.use_case.delete, key)
+                    message = "Deleted"
+            if key:
+                record = await run_in_threadpool(self.use_case.get, key)
+                value = record.value if record else ""
+                if record is None and not message:
+                    message = "Not found"
+        except ValueError:
+            return PlainTextResponse("Invalid record", 400)
+        except Exception:
+            return PlainTextResponse("Repository unavailable", 503)
+        content = (
+            '<!doctype html><html lang="en"><meta charset="utf-8"><title>Records</title>'
+            '<body><main><nav><a href="/admin/">Administration</a></nav><h1>Records</h1>'
+            '<p role="status">' + html.escape(message) + "</p>"
+            '<form method="get"><label>Lookup key <input name="key" maxlength="200" required>'
+            '</label><button>Find</button></form><form method="post">'
+            + str(csrf_input(request))
+            + '<label>Key <input name="key" maxlength="200" required value="'
+            + html.escape(key)
+            + '"></label><label>Value <textarea name="value" maxlength="10000">'
+            + html.escape(value)
+            + "</textarea></label>"
+        )
+        for action, permission, label in (
+            ("save", "records:write", "Save"),
+            ("delete", "records:delete", "Delete"),
+        ):
+            if self.runtime.admin_allowed(principal, permission):
+                content += f'<button name="action" value="{action}">{label}</button>'
+        return HTMLResponse(
+            content + "</form></main></body></html>", headers={"Cache-Control": "no-store"}
+        )

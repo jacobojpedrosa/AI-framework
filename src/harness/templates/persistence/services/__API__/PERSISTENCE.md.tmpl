@@ -1,0 +1,100 @@
+# Optional persistence capabilities
+
+The selected adapters are recorded in `app/infrastructure/persistence_settings.py`
+and the project's `project.yaml`. Only selected capabilities add dependencies and
+services. Application runtime never imports the harness.
+
+`app.state.resources` owns the repository, vector store and cache selected at
+generation time. Inject these ports into your use cases; do not import adapters
+from the domain/application layers. `create_app(resources=...)` supports test
+injection. Engine pools and Redis clients close on application shutdown.
+There are no public record CRUD endpoints or implicit business entities.
+
+## Repository
+
+`Repository` supports atomic `put(Record(key, value))`, `get(key)` and idempotent
+`delete(key)`. Values are strings; missing keys return None. Keys have 1–200
+characters, are case-sensitive, and cannot contain NUL. Values cannot contain
+NUL either. Multi-operation transactions, pagination and multi-tenancy are not
+part of this small reference contract. Namespaces isolate records; they are not
+an authorization mechanism.
+
+- Memory: a process-local reference adapter, no durability or shared workers.
+- SQLite: SQLAlchemy with a file on the `sqlite-data` volume; bounded lock wait.
+- PostgreSQL: SQLAlchemy and psycopg, bounded connections and statement timeouts.
+
+Both SQL dialects use bound parameters and explicit per-operation transactions.
+The same repository contracts run against memory, SQLite and, when selected,
+PostgreSQL. Unit tests create temporary SQLite databases; integration tests use
+unique namespaces and delete only their own rows. Never point integration tests
+at production.
+
+## Migrations and local startup
+
+For SQLite/PostgreSQL:
+
+```sh
+# Run from the generated project root. Starts required DB/cache containers.
+make migrate
+make up
+make test
+make test-contracts
+# For PostgreSQL and/or Redis, exercises the real Compose services:
+make test-integration
+make down
+```
+
+Memory/cache-only projects have no migrate target. SQL migrations are explicit;
+normal API startup never creates tables. Until migration, `/api/health` stays
+live but `/api/readiness` reports unavailable SQL storage. `make migrate` runs
+Alembic upgrade-to-head and serializes PostgreSQL migration runners with an
+advisory transaction lock. It preserves existing records when repeated.
+`make down` preserves database volumes. Deleting a volume or running Alembic
+downgrade can destroy data; neither is part of the normal lifecycle.
+
+To create a new revision inside the API's Python environment:
+
+```sh
+python -m alembic revision -m "describe schema change"
+# Edit the generated revision, review it, then:
+python -m app.infrastructure.migrate
+```
+
+`DATABASE_URL` is read from the environment, never `project.yaml`. Without Docker,
+create the local `data/` directory for SQLite and set
+`DATABASE_URL=sqlite:///data/app.db` before migrating. PostgreSQL URLs use the
+`postgresql+psycopg://` scheme. The Dockerfile includes migrations in runtime.
+
+Compose database credentials are explicitly disposable local defaults, not a
+production credential strategy. DB/cache have no published host ports. No cloud
+database or Redis deployment is configured. SQL data survives `make down`/`up`;
+Redis is disposable cache with persistence disabled.
+
+## pgvector
+
+When selected, revision 0002 enables the vector extension and a separate table.
+The initial vector contract uses **three dimensions**, Euclidean distance and
+exact search; it is a minimal executable example, not an embedding model default.
+Change the dimension constant, migration and contracts together before using a
+real embedding model. Components must be finite in [-1e10, 1e10]; result limits
+are integers 1–100. Ties are ordered by key. Float32 storage means distance
+comparisons should use a tolerance. No approximate index is created.
+
+`VectorStore` is separate from the record repository. Shared search/upsert/delete
+contracts run against the in-memory reference and pgvector. SQLite migrations
+skip the PostgreSQL-only vector table. Downgrade removes the vector table but
+keeps the extension, which other applications may share.
+
+## Redis cache
+
+`Cache` stores opaque bytes with a mandatory integer TTL of 1–86400 seconds;
+overwriting resets the TTL. Missing/expired keys return None. Namespace prefixes
+are encoded to avoid collisions. The adapter has bounded socket timeouts and
+no retries; failures are visible to callers and readiness reports unavailable.
+Tests compare Redis with a memory fake, including expiration and binary values.
+Test keys expire automatically; tests never use FLUSHDB.
+
+`make test` runs local tests, reporting unavailable external contracts as skipped.
+`make test-integration` supplies TEST_DATABASE_URL/TEST_REDIS_URL for the selected
+Compose services so their contracts actually run. Migrate SQL first. Manually
+running pytest against external services requires those explicit test variables.

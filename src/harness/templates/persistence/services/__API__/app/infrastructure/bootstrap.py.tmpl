@@ -1,0 +1,40 @@
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from app.adapters.http import health_router
+from app.adapters.local import ProcessProbe, SystemClock
+from app.application.readiness import CheckReadiness
+from app.infrastructure.resources import Resources, create_resources
+
+SERVICE_NAME = "@@API@@"
+
+
+def create_app(
+    readiness: CheckReadiness | None = None,
+    resources: Resources | None = None,
+) -> FastAPI:
+    if resources is None:
+        resources = create_resources() if readiness is None else Resources()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            resources.close()
+
+    app = FastAPI(
+        title="@@PROJECT@@",
+        version="0.1.0",
+        docs_url="/api/docs",
+        redoc_url=None,
+        openapi_url="/api/openapi.json",
+        lifespan=lifespan,
+    )
+    app.state.resources = resources
+    if readiness is None:
+        probes = {"process": ProcessProbe(), **resources.probes}
+        readiness = CheckReadiness(SERVICE_NAME, probes, SystemClock())
+    app.include_router(health_router(SERVICE_NAME, readiness))
+    return app

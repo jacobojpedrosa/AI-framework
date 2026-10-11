@@ -1,0 +1,29 @@
+from collections.abc import Mapping
+from datetime import timedelta
+
+from app.domain.readiness import Check, Readiness
+from app.ports.health import Clock, Probe
+
+
+class CheckReadiness:
+    def __init__(self, service: str, probes: Mapping[str, Probe], clock: Clock) -> None:
+        if not probes:
+            raise ValueError("At least one readiness probe is required")
+        self._service = service
+        self._probes = dict(probes)
+        self._clock = clock
+
+    def execute(self) -> Readiness:
+        checks = []
+        for name, probe in sorted(self._probes.items()):
+            try:
+                # A broken adapter returning a truthy non-bool must not report healthy.
+                available = probe.check() is True
+            except Exception:
+                # Public readiness responses must not disclose adapter errors/secrets.
+                available = False
+            checks.append(Check(name, available))
+        checked_at = self._clock.now()
+        if checked_at.tzinfo is None or checked_at.utcoffset() != timedelta(0):
+            raise ValueError("Clock must return a timezone-aware UTC datetime")
+        return Readiness(self._service, checked_at, tuple(checks))

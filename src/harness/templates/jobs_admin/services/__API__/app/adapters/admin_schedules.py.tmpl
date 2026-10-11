@@ -1,0 +1,78 @@
+import html
+
+from starlette.responses import HTMLResponse, PlainTextResponse
+from starlette_admin import CustomView, route
+from starlette_admin.security.csrf import csrf_input
+
+from app.application.jobs import ManageSchedules
+
+
+class SchedulesView(CustomView):
+    path = "/schedules"
+    route_name = "schedules"
+    menu_label = "Schedules"
+
+    def __init__(self, store, auth):
+        super().__init__()
+        self.store, self.auth = store, auth
+        self.manage = ManageSchedules(store)
+
+    def is_accessible(self, request):
+        return self.auth.admin_allowed(self.auth.principal(request), "schedules:read")
+
+    @route("", methods=["GET", "POST"])
+    async def index(self, request):
+        principal = self.auth.principal(request)
+        if not self.auth.admin_allowed(principal, "schedules:read"):
+            return PlainTextResponse("Forbidden", 403)
+        try:
+            if request.method == "POST":
+                if not self.auth.admin_allowed(principal, "schedules:write"):
+                    return PlainTextResponse("Forbidden", 403)
+                form = await request.form()
+                if set(form) - {"csrftoken", "name", "enabled", "interval_seconds"}:
+                    return PlainTextResponse("Unknown schedule fields", 400)
+                enabled = form.get("enabled", "false")
+                if enabled not in {"true", "false"}:
+                    return PlainTextResponse("Invalid enabled value", 400)
+                await self.manage.update(
+                    str(form.get("name", "")),
+                    enabled == "true",
+                    int(str(form.get("interval_seconds", ""))),
+                )
+            entries = await self.store.list()
+        except ValueError:
+            return PlainTextResponse("Invalid registered schedule", 400)
+        except Exception:
+            return PlainTextResponse("Scheduler unavailable", 503)
+        content = (
+            '<!doctype html><html lang="en"><meta charset="utf-8"><title>Schedules</title>'
+            '<body><main><a href="/admin/">Administration</a><h1>Schedules</h1>'
+            "<p>Only registered jobs can be scheduled. Intervals are in seconds.</p>"
+        )
+        writable = self.auth.admin_allowed(principal, "schedules:write")
+        for item in entries:
+            name, job = html.escape(item.name), html.escape(item.job)
+            content += f"<section><h2>{name}</h2><p>Job: {job}</p>"
+            if writable:
+                content += (
+                    '<form method="post">'
+                    + str(csrf_input(request))
+                    + f'<input type="hidden" name="name" value="{name}">'
+                    + '<label>Enabled <select name="enabled">'
+                )
+                for value in (True, False):
+                    selected = " selected" if item.enabled == value else ""
+                    content += f'<option value="{str(value).lower()}"{selected}>{value}</option>'
+                content += (
+                    "</select></label><label>Interval "
+                    '<input name="interval_seconds" type="number" min="1" max="86400" '
+                    f'value="{item.interval_seconds}" required></label>'
+                    "<button>Save</button></form>"
+                )
+            else:
+                content += f"<p>Enabled: {item.enabled}; interval: {item.interval_seconds}</p>"
+            content += "</section>"
+        return HTMLResponse(
+            content + "</main></body></html>", headers={"Cache-Control": "no-store"}
+        )

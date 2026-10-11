@@ -1,0 +1,43 @@
+from collections.abc import Awaitable, Callable, Mapping
+from types import MappingProxyType
+
+from app.domain.jobs import Schedule
+from app.ports.jobs import JobQueuePort, SchedulerPort
+
+
+class JobRegistry:
+    def __init__(self, handlers: Mapping[str, Callable[[], Awaitable[dict]]]):
+        self.handlers = MappingProxyType(dict(handlers))
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted(self.handlers))
+
+    def require(self, name: str) -> None:
+        if name not in self.handlers:
+            raise ValueError("Unknown registered job")
+
+    async def execute(self, name: str) -> dict:
+        self.require(name)
+        return await self.handlers[name]()
+
+
+class RunJob:
+    def __init__(self, registry: JobRegistry, queue: JobQueuePort):
+        self.registry, self.queue = registry, queue
+
+    async def execute(self, name: str) -> str:
+        self.registry.require(name)
+        return await self.queue.enqueue(name)
+
+
+class ManageSchedules:
+    def __init__(self, store: SchedulerPort):
+        self.store = store
+
+    async def update(self, name: str, enabled: bool, interval_seconds: int) -> Schedule:
+        return await self.store.update(name, enabled, interval_seconds)
+
+
+async def heartbeat() -> dict:
+    """A harmless registered example; real jobs should implement idempotent use cases."""
+    return {"status": "ok", "job": "heartbeat"}

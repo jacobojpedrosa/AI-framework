@@ -1,0 +1,266 @@
+# Scoped experimental evidence for the generated development skeleton.
+schema_version: 1
+integrations:
+  agent-os:
+    status: experimental
+    supported: "==3.0+475b0cac4c7c"
+    tested_version: "3.0+475b0cac4c7c"
+    source: https://github.com/buildermethods/agent-os
+    verified_at: "2026-09-24"
+    evidence: [docs/phase-11-report.md]
+    platforms: [macos-arm64]
+    constraints:
+      commit: "475b0cac4c7c5cf2336ad5a663b691a6d3415e05"
+      scope: official installer and unchanged standards commands; no model execution
+  aws:
+    status: planned
+    supported: null
+    tested_version: null
+    source: https://docs.aws.amazon.com/
+    verified_at: null
+    evidence: []
+  azure:
+    status: experimental
+    supported: null
+    tested_version: null
+    source: https://learn.microsoft.com/azure/
+    verified_at: "2026-10-10"
+    evidence: [docs/phase-13-multicloud-report.md]
+    platforms: [macos-arm64, linux-amd64-docker-desktop]
+    runtimes:
+      terraform-azurerm-provider: "5.9.0"
+    constraints:
+      scope: internal ingress stateless DEV; mock-provider plans and local container only
+  azure-blob:
+    status: planned
+    supported: null
+    tested_version: null
+    source: https://learn.microsoft.com/azure/storage/blobs/
+    verified_at: null
+    evidence: []
+  docker-compose:
+    status: experimental
+    supported: null
+    tested_version: "5.1.4"
+    source: https://docs.docker.com/compose/
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-4-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    constraints:
+      scope: fullstack-ai development skeleton only
+  fastapi:
+    status: experimental
+    supported: null
+    tested_version: "0.141.1"
+    source: https://fastapi.tiangolo.com/
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-4-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    constraints:
+      scope: fullstack-ai development skeleton only
+  firebase:
+    status: planned
+    supported: null
+    tested_version: null
+    source: https://firebase.google.com/docs/auth
+    verified_at: null
+    evidence: []
+  gcp:
+    status: experimental
+    supported: null
+    tested_version: null
+    source: https://cloud.google.com/run/docs/container-contract
+    verified_at: "2026-10-10"
+    evidence: [docs/phase-13-report.md]
+    platforms: [macos-arm64, linux-amd64-docker-desktop]
+    runtimes:
+      terraform-google-provider: "8.6.0"
+    constraints:
+      scope: private stateless DEV; offline plan and local container only; no cloud deployment verified
+  gcs:
+    status: planned
+    supported: null
+    tested_version: null
+    source: https://cloud.google.com/storage/docs
+    verified_at: null
+    evidence: []
+  gemini:
+    status: experimental
+    supported: null
+    tested_version: "2.25.0"
+    source: https://ai.google.dev/gemini-api/docs
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-6-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    constraints:
+      scope: SDK with simulated HTTP; live account and credentials not tested
+  next:
+    status: planned
+    supported: null
+    tested_version: null
+    source: https://nextjs.org/docs
+    verified_at: null
+    evidence: []
+  oidc:
+    status: planned
+    supported: null
+    tested_version: null
+    source: https://openid.net/specs/openid-connect-core-1_0.html
+    verified_at: null
+    evidence: []
+  openai:
+    status: experimental
+    supported: null
+    tested_version: "3.19.0"
+    source: https://platform.openai.com/docs
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-6-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    constraints:
+      scope: SDK with simulated HTTP; live account and credentials not tested
+  openspec:
+    status: experimental
+    supported: "==1.13.2"
+    tested_version: "1.13.2"
+    source: https://github.com/Fission-AI/OpenSpec
+    verified_at: "2026-09-24"
+    evidence: [docs/phase-11-report.md]
+    platforms: [macos-arm64]
+    runtimes:
+      node: "24.2.0"
+      npm: "11.7.0"
+    constraints:
+      scope: project-local CLI and official Claude/Codex files; no model execution
+  opentelemetry:
+    status: experimental
+    supported: null
+    tested_version: "1.44.0"
+    source: https://opentelemetry.io/docs/
+    verified_at: "2026-09-24"
+    evidence: [docs/phase-10-report.md]
+    platforms: [linux-arm64-docker-desktop, macos-arm64-python312]
+    runtimes:
+      javascript-api: "1.9.1"
+      javascript-trace-sdk: "2.11.0"
+    constraints:
+      scope: web health client to API; OTLP protocol tested with simulated HTTP
+  pgvector:
+    status: experimental
+    supported: null
+    tested_version: "0.8.6"
+    source: https://github.com/pgvector/pgvector
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-5-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    constraints:
+      scope: fullstack-ai, three-dimensional exact search, PostgreSQL 17.11
+  playwright:
+    status: experimental
+    supported: "==1.64.0"
+    tested_version: "1.64.0"
+    source: https://playwright.dev/docs/intro
+    verified_at: "2026-10-09"
+    evidence: [docs/phase-12-report.md]
+    platforms: [macos-arm64]
+    runtimes:
+      node: "24.2.0"
+    constraints:
+      scope: Chromium desktop and mobile emulation against local collection prototype
+  postgres:
+    status: experimental
+    supported: null
+    tested_version: "17.11"
+    source: https://www.postgresql.org/docs/
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-5-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    runtimes:
+      python: "3.12.14"
+      sqlalchemy: "2.0.54"
+      psycopg: "3.3.6"
+      alembic: "1.20.0"
+    constraints:
+      scope: fullstack-ai, local Docker only
+  react:
+    status: experimental
+    supported: null
+    tested_version: "19.3.0"
+    source: https://react.dev/
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-4-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    constraints:
+      scope: fullstack-ai development skeleton only
+  redis:
+    status: experimental
+    supported: null
+    tested_version: "8.2.10"
+    source: https://redis.io/docs/latest/
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-5-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    runtimes:
+      redis-py: "8.1.0"
+    constraints:
+      scope: fullstack-ai namespaced byte cache with TTL
+  s3:
+    status: planned
+    supported: null
+    tested_version: null
+    source: https://docs.aws.amazon.com/s3/
+    verified_at: null
+    evidence: []
+  sqlite:
+    status: experimental
+    supported: null
+    tested_version: "3.40.1"
+    source: https://www.sqlite.org/docs.html
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-5-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    runtimes:
+      python: "3.12.14"
+      sqlalchemy: "2.0.54"
+      alembic: "1.20.0"
+    constraints:
+      scope: fullstack-ai file-backed SQL repository
+  starlette-admin:
+    status: planned
+    supported: null
+    tested_version: null
+    source: https://jowilf.github.io/starlette-admin/
+    verified_at: null
+    evidence: []
+  taskiq:
+    status: experimental
+    supported: null
+    tested_version: "0.12.6"
+    source: https://taskiq-python.github.io/
+    verified_at: "2026-09-24"
+    evidence: [docs/phase-9-report.md]
+    platforms: [macos-arm64-python312, linux-arm64-docker-desktop]
+    runtimes:
+      taskiq-redis: "1.2.3"
+      redis-py: "8.1.0"
+    constraints:
+      scope: registered jobs and schedules; one scheduler; idempotent handlers required
+  terraform:
+    status: experimental
+    supported: null
+    tested_version: "1.15.8"
+    source: https://developer.hashicorp.com/terraform/docs
+    verified_at: "2026-10-10"
+    evidence: [docs/phase-13-report.md]
+    platforms: [macos-arm64]
+    constraints:
+      scope: Google 8.6.0 offline plans; AzureRM 5.9.0 mock plans; fmt and validate both
+  vertex:
+    status: experimental
+    supported: null
+    tested_version: "2.25.0"
+    source: https://cloud.google.com/vertex-ai/docs
+    verified_at: "2026-09-23"
+    evidence: [docs/phase-6-report.md]
+    platforms: [linux-arm64-docker-desktop]
+    constraints:
+      scope: SDK with simulated HTTP; live account and credentials not tested

@@ -1,0 +1,38 @@
+import os
+import uuid
+
+import pytest
+from sqlalchemy import text
+
+from app.adapters.memory_repository import MemoryRepository
+from app.adapters.sql_repository import SqlRepository, open_engine
+from app.infrastructure.migrate import upgrade
+from app.infrastructure.persistence_settings import DATABASE
+
+
+@pytest.fixture(params=["memory", "sqlite"] + (["postgres"] if DATABASE == "postgres" else []))
+def repository(request, tmp_path):
+    if request.param == "memory":
+        yield MemoryRepository()
+        return
+    if request.param == "postgres":
+        url = os.environ.get("TEST_DATABASE_URL")
+        if not url:
+            pytest.skip("Set TEST_DATABASE_URL to run PostgreSQL contracts")
+        if not url.startswith("postgresql+psycopg://"):
+            pytest.fail("TEST_DATABASE_URL must use postgresql+psycopg://")
+    else:
+        url = "sqlite:///" + str(tmp_path / "contracts.db")
+    engine = open_engine(url)
+    namespace = "test-" + uuid.uuid4().hex
+    try:
+        if request.param == "sqlite":
+            upgrade(engine)
+        yield SqlRepository(engine, namespace)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM harness_records WHERE namespace=:namespace"),
+                {"namespace": namespace},
+            )
+        engine.dispose()

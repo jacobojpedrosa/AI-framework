@@ -1,0 +1,81 @@
+import json
+import traceback
+
+import pytest
+
+from app.application.generate_text import GenerateText
+from app.domain.ai import AIError, TextRequest, TextResult
+from app.infrastructure.ai_settings import ENABLED_PROVIDERS
+from tests.ai_clients import PRIVATE_PROMPT, SECRET, stub_provider
+
+REAL = [name for name in ENABLED_PROVIDERS if name != "fake"]
+
+
+@pytest.mark.parametrize("provider", ENABLED_PROVIDERS)
+def test_switching_preserves_application_contract(provider):
+    with stub_provider(provider) as (adapter, calls):
+        result = GenerateText(adapter).execute(TextRequest(PRIVATE_PROMPT, 64))
+        assert isinstance(result, TextResult)
+        assert result.provider == provider
+        assert result.text == ("Fake response." if provider == "fake" else "Contract response.")
+        assert len(calls) == (0 if provider == "fake" else 1)
+        if calls:
+            body = json.loads(calls[0].content)
+            if provider == "openai":
+                assert calls[0].url.path.endswith("/responses")
+                assert body["input"] == PRIVATE_PROMPT
+                assert body["store"] is False
+                assert body["max_output_tokens"] == 64
+            else:
+                assert calls[0].url.path.endswith(":generateContent")
+                assert body["generationConfig"]["maxOutputTokens"] == 64
+                assert body["contents"][0]["parts"][0]["text"] == PRIVATE_PROMPT
+                if provider == "vertex":
+                    assert "/projects/test-project/locations/us-central1/" in calls[0].url.path
+
+
+@pytest.mark.parametrize("provider", REAL)
+@pytest.mark.parametrize(
+    "status,code",
+    [
+        (401, "authentication"),
+        (403, "authentication"),
+        (429, "rate_limited"),
+        (500, "unavailable"),
+        (404, "invalid_request"),
+    ],
+)
+def test_errors_are_sanitized_without_retries(provider, status, code):
+    with stub_provider(provider, status=status) as (adapter, calls):
+        with pytest.raises(AIError) as caught:
+            GenerateText(adapter).execute(TextRequest(PRIVATE_PROMPT))
+        assert caught.value.code == code
+        rendered = "".join(traceback.format_exception(caught.value))
+        assert SECRET not in rendered and PRIVATE_PROMPT not in rendered
+        assert len(calls) == 1
+
+
+@pytest.mark.parametrize("provider", REAL)
+@pytest.mark.parametrize(
+    "mode,code",
+    [
+        ("blocked", "blocked"),
+        ("empty", "invalid_response"),
+        ("incomplete", "incomplete"),
+        ("timeout", "timeout"),
+    ],
+)
+def test_incomplete_blocked_empty_and_timeout(provider, mode, code):
+    with stub_provider(provider, mode=mode) as (adapter, calls):
+        with pytest.raises(AIError) as caught:
+            adapter.generate(TextRequest(PRIVATE_PROMPT))
+        assert caught.value.code == code
+        assert SECRET not in str(caught.value)
+        assert len(calls) == 1
+
+
+@pytest.mark.parametrize("provider", REAL)
+def test_remote_metadata_check_is_not_a_generation(provider):
+    with stub_provider(provider) as (adapter, calls):
+        adapter.check_remote()
+        assert len(calls) == 1 and calls[0].method == "GET"

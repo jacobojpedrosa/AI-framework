@@ -1,0 +1,7 @@
+from typing import Protocol
+
+from app.domain.identity import Principal
+
+
+class TokenVerifier(Protocol):
+    def verify(self, token: str) -> tuple[Principal, int]: ...

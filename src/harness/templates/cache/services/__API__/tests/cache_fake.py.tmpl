@@ -1,0 +1,27 @@
+import time
+
+from app.domain.cache import validate_cache_entry, validate_cache_key
+
+
+class MemoryCache:
+    def __init__(self):
+        self._items = {}
+
+    def set(self, key: str, value: bytes, ttl_seconds: int) -> None:
+        validate_cache_entry(key, value, ttl_seconds)
+        self._items[key] = (value, time.monotonic() + ttl_seconds)
+
+    def get(self, key: str) -> bytes | None:
+        validate_cache_key(key)
+        entry = self._items.get(key)
+        if entry is None:
+            return None
+        if entry[1] <= time.monotonic():
+            self._items.pop(key, None)
+            return None
+        return entry[0]
+
+    def delete(self, key: str) -> bool:
+        exists = self.get(key) is not None
+        self._items.pop(key, None)
+        return exists
